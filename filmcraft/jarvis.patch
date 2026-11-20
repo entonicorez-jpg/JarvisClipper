@@ -12,7 +12,7 @@ index f6e64ea..efbc58e 100644
          if recover == Some(false) {
              app.dialog = None;
 diff --git a/crates/engine/src/commands.rs b/crates/engine/src/commands.rs
-index 44399e4..8a5b56f 100644
+index 44399e4..90176f3 100644
 --- a/crates/engine/src/commands.rs
 +++ b/crates/engine/src/commands.rs
 @@ -842,6 +842,21 @@ pub fn linked_roll_pairs(seq: &filmcraft_project::Sequence, left: ClipId, right:
@@ -85,6 +85,550 @@ index 44399e4..8a5b56f 100644
          cmd!("sequence.addEditAllTracks", "Add Edit to All Tracks", ["Sequence"], Some("Cmd+Shift+K"), r#"{"time":ticks?}"#, has_seq, |s, p| {
              let t = time_p(s, p, "").unwrap_or(s.playhead());
              let n = s.edit_sequence("Add Edit to All Tracks", |q, ctx, _| {
+@@ -4236,6 +4285,7 @@ fn build() -> Vec<CommandSpec> {
+     v.extend(crate::presets::commands());
+     v.extend(crate::export_tools::commands());
+     v.extend(crate::transcript::commands());
++    v.extend(crate::jarvis::commands());
+     v.extend(crate::panels::commands());
+     v.extend(crate::scopes::commands());
+     v.extend(crate::remix::commands());
+diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
+new file mode 100644
+index 0000000..0016455
+--- /dev/null
++++ b/crates/engine/src/jarvis.rs
+@@ -0,0 +1,518 @@
++//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
++//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
++
++use serde_json::{Value, json};
++
++use filmcraft_edit::transcript::SeqWord;
++use filmcraft_project::graphic::{TEXT_LAYER, ensure_layer_uids, new_text_layer};
++use filmcraft_project::{CharStyle, ClipId, LayerExtra, Param, ParamValue, StyleRun, Track, TrackId, TrackKind};
++use filmcraft_project::keyframe::Interpolation;
++use filmcraft_geom::Vec2;
++use filmcraft_time::{Tick, TimeRange};
++
++use crate::commands::{CommandSpec, bad, bool_p, f64_p, has_seq, str_p, u64_p};
++use crate::{EngineError, Result, Session};
++
++type Run = fn(&mut Session, &Value) -> Result<Value>;
++
++fn spec(id: &'static str, label: &'static str, params: &'static str, run: Run) -> CommandSpec {
++    CommandSpec {
++        id,
++        label,
++        menu: &["Sequence", "Jarvis"],
++        shortcut: None,
++        params,
++        enabled: has_seq,
++        run,
++        journal: true,
++        named: crate::commands::NamedKeys::NONE,
++    }
++}
++
++pub const CAPTION_TRACK: &str = "Sottotitoli Jarvis";
++
++// ---------------------------------------------------------------- stili dei sottotitoli
++
++#[derive(Clone, Copy)]
++pub struct CapStyle {
++    pub id: &'static str,
++    pub name: &'static str,
++    pub font: &'static str,
++    pub font_style: &'static str,
++    pub fill: [f32; 4],
++    /// Colori della parola detta (a turno); vuoto = nessuna evidenziazione.
++    pub highlight: &'static [[f32; 4]],
++    /// Ingrandimento della parola detta (1 = uguale).
++    pub hl_size: f32,
++    pub stroke: Option<[f32; 4]>,
++    pub stroke_w: f32,
++    pub shadow: bool,
++    /// (colore, opacità %) del riquadro dietro al testo.
++    pub boxed: Option<([f32; 4], f32)>,
++    pub words: usize,
++    pub upper: bool,
++    pub pop: bool,
++}
++
++const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
++const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
++const YELLOW: [f32; 4] = [1.0, 0.84, 0.04, 1.0];
++const GREEN: [f32; 4] = [0.22, 1.0, 0.35, 1.0];
++const RED: [f32; 4] = [1.0, 0.18, 0.22, 1.0];
++const CYAN: [f32; 4] = [0.2, 0.85, 1.0, 1.0];
++const PURPLE: [f32; 4] = [0.66, 0.42, 1.0, 1.0];
++
++pub const STYLES: &[CapStyle] = &[
++    CapStyle { id: "jarvis", name: "Jarvis (giallo)", font: "Arial Black", font_style: "Regular", fill: WHITE, highlight: &[YELLOW], hl_size: 1.0,
++        stroke: Some(BLACK), stroke_w: 0.13, shadow: true, boxed: None, words: 3, upper: true, pop: true },
++    CapStyle { id: "hormozi", name: "Hormozi (verde)", font: "Arial Black", font_style: "Regular", fill: WHITE, highlight: &[GREEN], hl_size: 1.15,
++        stroke: Some(BLACK), stroke_w: 0.14, shadow: true, boxed: None, words: 3, upper: true, pop: true },
++    CapStyle { id: "parola", name: "Una parola alla volta", font: "Arial Black", font_style: "Regular", fill: WHITE, highlight: &[WHITE, YELLOW, GREEN, CYAN], hl_size: 1.0,
++        stroke: Some(BLACK), stroke_w: 0.14, shadow: true, boxed: None, words: 1, upper: true, pop: true },
++    CapStyle { id: "beast", name: "Beast (giallo + rosso)", font: "Arial Black", font_style: "Regular", fill: YELLOW, highlight: &[RED], hl_size: 1.1,
++        stroke: Some(BLACK), stroke_w: 0.16, shadow: true, boxed: None, words: 2, upper: true, pop: true },
++    CapStyle { id: "box", name: "Riquadro bianco", font: "Arial", font_style: "Bold", fill: BLACK, highlight: &[RED], hl_size: 1.0,
++        stroke: None, stroke_w: 0.0, shadow: false, boxed: Some((WHITE, 100.0)), words: 3, upper: false, pop: true },
++    CapStyle { id: "neon", name: "Neon viola", font: "Arial Black", font_style: "Regular", fill: WHITE, highlight: &[PURPLE], hl_size: 1.08,
++        stroke: Some([0.16, 0.0, 0.3, 1.0]), stroke_w: 0.12, shadow: true, boxed: None, words: 3, upper: true, pop: true },
++    CapStyle { id: "minimal", name: "Minimal", font: "Inter", font_style: "Bold", fill: WHITE, highlight: &[], hl_size: 1.0,
++        stroke: None, stroke_w: 0.0, shadow: true, boxed: None, words: 5, upper: false, pop: false },
++];
++
++pub fn style(id: &str) -> &'static CapStyle {
++    STYLES.iter().find(|s| s.id == id).unwrap_or(&STYLES[0])
++}
++
++// ---------------------------------------------------------------- parolacce
++
++const SWEARS: &[&str] = &[
++    "cazz", "minchi", "merd", "stronz", "vaffancul", "fancul", "puttan", "troi", "coglion", "bastard", "figa", "fica", "incazz",
++    "porcodio", "porcamadonna", "diocane", "dioporco", "madonnaputtana", "fuck", "shit", "bitch",
++];
++
++fn norm(w: &str) -> String {
++    w.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
++}
++
++fn is_swear(w: &str) -> bool {
++    let n = norm(w);
++    n.len() >= 3 && SWEARS.iter().any(|s| n.starts_with(s)) && !matches!(n.as_str(), "figata" | "figate" | "figo" | "fighi" | "fico")
++}
++
++/// "cazzo" -> "c***o"
++fn mask(w: &str) -> String {
++    let cs: Vec<char> = w.chars().collect();
++    let letters: Vec<usize> = (0..cs.len()).filter(|&i| cs[i].is_alphanumeric()).collect();
++    if letters.len() < 3 {
++        return w.to_string();
++    }
++    let (a, b) = (letters[0], letters[letters.len() - 1]);
++    cs.iter().enumerate().map(|(i, c)| if i > a && i < b && c.is_alphanumeric() { '*' } else { *c }).collect()
++}
++
++// ---------------------------------------------------------------- raggruppamento
++
++fn clean(w: &str, upper: bool) -> String {
++    let t = w.trim();
++    let t: String = t.trim_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | '"' | '«' | '»' | '…')).to_string();
++    if upper { t.to_uppercase() } else { t }
++}
++
++/// Gruppi di parole: si spezza a `n` parole, a `max_chars`, sulle pause e dopo la punteggiatura.
++fn groups(words: &[SeqWord], n: usize, max_chars: usize) -> Vec<Vec<usize>> {
++    let pause = Tick::from_seconds_f64(0.45);
++    let mut out: Vec<Vec<usize>> = Vec::new();
++    let mut cur: Vec<usize> = Vec::new();
++    let mut chars = 0usize;
++    for (i, w) in words.iter().enumerate() {
++        let len = w.text.trim().chars().count();
++        let gap = cur.last().map(|&j| w.start - words[j].end > pause).unwrap_or(false);
++        if !cur.is_empty() && (cur.len() >= n || chars + 1 + len > max_chars || gap) {
++            out.push(std::mem::take(&mut cur));
++            chars = 0;
++        }
++        chars += len + usize::from(!cur.is_empty());
++        cur.push(i);
++        let t = w.text.trim_end();
++        if n > 1 && (t.ends_with('.') || t.ends_with('?') || t.ends_with('!')) {
++            out.push(std::mem::take(&mut cur));
++            chars = 0;
++        }
++    }
++    if !cur.is_empty() {
++        out.push(cur);
++    }
++    out
++}
++
++fn color(v: [f32; 4]) -> ParamValue {
++    ParamValue::Color(v)
++}
++
++fn setp(e: &mut filmcraft_project::EffectInstance, k: &str, v: ParamValue) {
++    e.params.insert(k.to_string(), Param::new(v));
++}
++
++/// Il livello di testo di un pezzo di sottotitolo.
++fn caption_layer(st: &CapStyle, text: &str, hl: Option<(std::ops::Range<usize>, [f32; 4])>, pos: Vec2, size: f64, pop: bool, rate: filmcraft_time::FrameRate) -> filmcraft_project::EffectInstance {
++    let mut e = new_text_layer(text, pos, size);
++    setp(&mut e, "name", ParamValue::Text("Sottotitolo".into()));
++    setp(&mut e, "font", ParamValue::Text(st.font.into()));
++    setp(&mut e, "font_style", ParamValue::Text(st.font_style.into()));
++    setp(&mut e, "align", ParamValue::Choice(1));
++    setp(&mut e, "fill_color", color(st.fill));
++    if let Some(sc) = st.stroke {
++        setp(&mut e, "stroke", ParamValue::Bool(true));
++        setp(&mut e, "stroke_color", color(sc));
++        setp(&mut e, "stroke_width", ParamValue::Float(size * st.stroke_w as f64));
++        setp(&mut e, "stroke_type", ParamValue::Choice(0));
++    }
++    if st.shadow {
++        setp(&mut e, "shadow", ParamValue::Bool(true));
++        setp(&mut e, "shadow_opacity", ParamValue::Float(70.0));
++        setp(&mut e, "shadow_distance", ParamValue::Float(size * 0.06));
++        setp(&mut e, "shadow_blur", ParamValue::Float(size * 0.18));
++    }
++    if let Some((bc, op)) = st.boxed {
++        setp(&mut e, "background", ParamValue::Bool(true));
++        setp(&mut e, "background_color", color(bc));
++        setp(&mut e, "background_opacity", ParamValue::Float(op as f64));
++        setp(&mut e, "background_size", ParamValue::Float(size * 0.28));
++        setp(&mut e, "background_radius", ParamValue::Float(size * 0.22));
++    }
++    if let Some((r, c)) = hl {
++        let style = CharStyle { fill: Some(c), size: (st.hl_size != 1.0).then_some(size as f32 * st.hl_size), ..Default::default() };
++        e.layer = Some(Box::new(LayerExtra { uid: 0, runs: vec![StyleRun { start: r.start, end: r.end, style }], pin: None }));
++    }
++    if pop {
++        // entrata "pop": piccolo -> più grande -> normale
++        let f = rate.frame_duration();
++        let mut p = Param::new(ParamValue::Float(100.0));
++        p.put_keyframe(Tick::ZERO, ParamValue::Float(55.0));
++        p.put_keyframe(Tick(f.0 * 3), ParamValue::Float(112.0));
++        p.put_keyframe(Tick(f.0 * 6), ParamValue::Float(100.0));
++        for k in &mut p.keyframes {
++            k.interp = Interpolation::EaseOut;
++        }
++        e.params.insert("scale".into(), p);
++    }
++    e
++}
++
++/// Le parole della sequenza; se non c'è la trascrizione la fa (scaricando il modello la prima volta).
++fn words_or_transcribe(s: &mut Session, p: &Value) -> Result<Vec<SeqWord>> {
++    let w = crate::transcript::sequence_words(s);
++    if !w.is_empty() && !bool_p(p, "retranscribe").unwrap_or(false) {
++        return Ok(w);
++    }
++    let model = str_p(p, "model").unwrap_or("whisper-small").to_string();
++    if let (Some(dir), Some(m)) = (crate::transcript::models_dir(), filmcraft_speech::models::find(&model)) {
++        if !filmcraft_speech::models::installed(&dir, m) {
++            s.execute("transcript.downloadModel", json!({"model": model}))?;
++        }
++    }
++    let lang = str_p(p, "language").unwrap_or("it").to_string();
++    s.execute("transcript.generate", json!({"model": model, "language": lang, "diarize": false}))?;
++    Ok(crate::transcript::sequence_words(s))
++}
++
++fn auto_captions(s: &mut Session, p: &Value) -> Result<Value> {
++    let st = *style(str_p(p, "style").unwrap_or("jarvis"));
++    let words = words_or_transcribe(s, p)?;
++    if words.is_empty() {
++        return Err(EngineError::Other("nessuna parola trovata nell'audio della sequenza".into()));
++    }
++    let seq_id = s.state.active_sequence.ok_or(EngineError::NoSequence)?;
++    let (w, h, rate) = {
++        let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
++        (q.settings.width, q.settings.height, q.settings.frame_rate)
++    };
++    let n = u64_p(p, "words").map(|v| v.clamp(1, 8) as usize).unwrap_or(st.words);
++    let upper = bool_p(p, "upper").unwrap_or(st.upper);
++    let censor = bool_p(p, "censor").unwrap_or(true);
++    let pop = bool_p(p, "pop").unwrap_or(st.pop);
++    let ypos = f64_p(p, "y").unwrap_or(if h > w { 0.66 } else { 0.8 }).clamp(0.05, 0.95);
++    let scale = f64_p(p, "size").unwrap_or(100.0).clamp(30.0, 300.0) / 100.0;
++    let size = (w.min(h) as f64) * if h > w { 0.085 } else { 0.082 } * scale;
++    let max_chars = if n == 1 { 40 } else { ((w as f64 * 0.86) / (size * 0.72)).max(8.0) as usize };
++    let pos = Vec2::new(w as f64 / 2.0, h as f64 * ypos);
++    let hold = Tick::from_seconds_f64(0.6);
++
++    let texts: Vec<String> = words.iter().map(|x| {
++        let t = clean(&x.text, upper);
++        if censor && is_swear(&t) { mask(&t) } else { t }
++    }).collect();
++    let gs = groups(&words, n, max_chars);
++
++    // pezzi: (inizio, fine, testo, evidenziazione, pop)
++    let mut pieces: Vec<(Tick, Tick, String, Option<(std::ops::Range<usize>, [f32; 4])>, bool)> = Vec::new();
++    let mut color_i = 0usize;
++    for (gi, g) in gs.iter().enumerate() {
++        let gstart = words[g[0]].start;
++        let next = gs.get(gi + 1).map(|ng| words[ng[0]].start);
++        let gend_max = words[*g.last().unwrap_or(&g[0])].end + hold;
++        let gend = next.map_or(gend_max, |nx| nx.min(gend_max));
++        let parts: Vec<&str> = g.iter().map(|&i| texts[i].as_str()).collect();
++        let text = parts.join(" ");
++        let mut offs = Vec::new();
++        let mut c = 0usize;
++        for (k, t) in parts.iter().enumerate() {
++            if k > 0 {
++                c += 1;
++            }
++            offs.push(c..c + t.chars().count());
++            c += t.chars().count();
++        }
++        for (k, &i) in g.iter().enumerate() {
++            let a = if k == 0 { gstart } else { words[i].start };
++            let b = if k + 1 < g.len() { words[g[k + 1]].start } else { gend };
++            let hl = if st.highlight.is_empty() {
++                None
++            } else {
++                let col = st.highlight[color_i % st.highlight.len()];
++                if n == 1 {
++                    color_i += 1;
++                }
++                Some((offs[k].clone(), col))
++            };
++            pieces.push((a, b, text.clone(), hl, pop && k == 0));
++            if st.highlight.is_empty() {
++                // senza evidenziazione basta un pezzo per gruppo
++                pieces.last_mut().map(|x| x.1 = gend);
++                break;
++            }
++        }
++        if n > 1 {
++            color_i += 1;
++        }
++    }
++
++    let replace = bool_p(p, "replace").unwrap_or(true);
++    let count = s.edit("Sottotitoli Jarvis", |pr, _st| {
++        let src = crate::graphics::graphic_source(pr, w, h, rate);
++        let mut items = Vec::new();
++        let mut last_end = Tick::ZERO;
++        for (a, b, text, hl, pp) in &pieces {
++            let a = rate.snap(*a).max(last_end);
++            let b = rate.snap(*b);
++            if b <= a {
++                continue;
++            }
++            let Some(mut ti) = pr.make_track_item(src, TrackKind::Video, a, TimeRange::new(Tick::ZERO, b - a), rate) else { continue };
++            ti.name = text.clone();
++            let mut layer = caption_layer(&st, text, hl.clone(), pos, size, *pp, rate);
++            filmcraft_project::resolve_auto_points(&mut layer, (w, h), (w, h));
++            ti.effects.push(layer);
++            ensure_layer_uids(&mut ti.effects);
++            last_end = b;
++            items.push(ti);
++        }
++        let tid = TrackId(pr.alloc_id());
++        let q = pr.sequence_mut(seq_id).ok_or(EngineError::NoSequence)?;
++        if replace {
++            q.video_tracks.retain(|t| t.name != CAPTION_TRACK);
++        }
++        let mut t = Track::new(tid, TrackKind::Video, CAPTION_TRACK.to_string());
++        let n = items.len();
++        t.items = items;
++        t.sort();
++        q.video_tracks.push(t);
++        q.check().map_err(EngineError::Other)?;
++        Ok(n)
++    })?;
++    let _ = TEXT_LAYER;
++    Ok(json!({"captions": count, "words": words.len(), "style": st.id}))
++}
++
++// ---------------------------------------------------------------- transizioni
++
++pub struct TransPreset {
++    pub id: &'static str,
++    pub name: &'static str,
++    pub effect: &'static str,
++    pub frames: i64,
++}
++
++pub const TRANSITIONS: &[TransPreset] = &[
++    TransPreset { id: "zoom_blur", name: "Zoom blur", effect: "zoom_blur", frames: 8 },
++    TransPreset { id: "whip", name: "Whip (frusta)", effect: "whip", frames: 6 },
++    TransPreset { id: "cross_zoom", name: "Cross zoom", effect: "cross_zoom", frames: 10 },
++    TransPreset { id: "spin", name: "Spin con blur", effect: "spin_motion", frames: 10 },
++    TransPreset { id: "push", name: "Push con blur", effect: "push", frames: 8 },
++    TransPreset { id: "shake", name: "Terremoto", effect: "earthquake", frames: 8 },
++    TransPreset { id: "glitch", name: "Glitch", effect: "glitch", frames: 6 },
++    TransPreset { id: "flash", name: "Flash bianco", effect: "flash", frames: 6 },
++    TransPreset { id: "light_leak", name: "Light leak", effect: "light_leak", frames: 14 },
++    TransPreset { id: "vhs", name: "VHS", effect: "vhs_damage", frames: 8 },
++    TransPreset { id: "dissolve", name: "Dissolvenza", effect: "cross_dissolve", frames: 10 },
++];
++
++const MIX: &[&str] = &["zoom_blur", "whip", "cross_zoom", "push", "flash"];
++
++/// I tagli (clip di sinistra) su cui mettere la transizione.
++fn edit_points(s: &Session, scope: &str) -> Vec<ClipId> {
++    let Some(q) = s.active_sequence() else { return Vec::new() };
++    let t = s.playhead();
++    let half = Tick(s.sequence_rate().frame_duration().0 / 2);
++    let tracks: Vec<&Track> = q.video_tracks.iter().filter(|tr| tr.name != CAPTION_TRACK).collect();
++    let joined = |tr: &Track, i: usize| tr.items.get(i + 1).is_some_and(|n| n.start == tr.items[i].end());
++    let mut out = Vec::new();
++    match scope {
++        "selection" => {
++            for tr in &tracks {
++                for i in 0..tr.items.len() {
++                    if s.state.selection.contains(&tr.items[i].id) && joined(tr, i) {
++                        out.push(tr.items[i].id);
++                    }
++                }
++            }
++        }
++        "all" => {
++            if let Some(tr) = tracks.first() {
++                out.extend((0..tr.items.len()).filter(|&i| joined(tr, i)).map(|i| tr.items[i].id));
++            }
++        }
++        _ => {
++            // il taglio più vicino all'indicatore, sulla traccia più bassa che ne ha uno
++            for tr in &tracks {
++                if let Some(i) = (0..tr.items.len()).filter(|&i| joined(tr, i)).min_by_key(|&i| (tr.items[i].end() - t).0.abs()) {
++                    if (tr.items[i].end() - t).0.abs() <= half.0 * 2 + s.sequence_rate().frame_duration().0 * 12 {
++                        out.push(tr.items[i].id);
++                        break;
++                    }
++                }
++            }
++        }
++    }
++    out
++}
++
++fn transition(s: &mut Session, p: &Value) -> Result<Value> {
++    let pid = str_p(p, "preset").unwrap_or("zoom_blur").to_string();
++    let scope = str_p(p, "scope").unwrap_or("playhead").to_string();
++    let clips = edit_points(s, &scope);
++    if clips.is_empty() {
++        return Err(bad("jarvis.transition", "nessun taglio qui: metti l'indicatore su un taglio o seleziona le clip"));
++    }
++    let mut done = 0;
++    let mut last_err = None;
++    for (k, c) in clips.iter().enumerate() {
++        let id = if pid == "mix" { MIX[k % MIX.len()] } else { pid.as_str() };
++        let Some(tp) = TRANSITIONS.iter().find(|x| x.id == id) else { return Err(bad("jarvis.transition", "preset sconosciuto")) };
++        let frames = u64_p(p, "frames").map(|v| v as i64).unwrap_or(tp.frames);
++        let mut ok = false;
++        for align in ["center", "end", "start"] {
++            match s.execute("sequence.applyVideoTransition", json!({"clip": c.0, "effect": tp.effect, "frames": frames, "edge": "out", "align": align})) {
++                Ok(_) => {
++                    ok = true;
++                    break;
++                }
++                Err(e) => last_err = Some(e.to_string()),
++            }
++        }
++        done += usize::from(ok);
++    }
++    if done == 0 {
++        return Err(EngineError::Other(last_err.unwrap_or_else(|| "transizione non applicata".into())));
++    }
++    Ok(json!({"transitions": done}))
++}
++
++// ---------------------------------------------------------------- effetti sulle clip
++
++pub const CLIP_FX: &[(&str, &str)] = &[
++    ("punch", "Punch-in (zoom secco)"),
++    ("zoom_in", "Zoom lento avanti"),
++    ("zoom_out", "Zoom lento indietro"),
++    ("shake", "Shake reazione"),
++];
++
++fn target_clips(s: &Session) -> Vec<ClipId> {
++    let Some(q) = s.active_sequence() else { return Vec::new() };
++    let vids: Vec<ClipId> = q.video_tracks.iter().flat_map(|t| t.items.iter()).map(|i| i.id).filter(|c| s.state.selection.contains(c)).collect();
++    if !vids.is_empty() {
++        return vids;
++    }
++    let t = s.playhead();
++    q.video_tracks.iter().rev().filter(|tr| tr.name != CAPTION_TRACK).find_map(|tr| tr.item_at(t).map(|i| i.id)).into_iter().collect()
++}
++
++fn clip_fx(s: &mut Session, p: &Value) -> Result<Value> {
++    let fx = str_p(p, "preset").unwrap_or("punch").to_string();
++    let amount = f64_p(p, "amount").unwrap_or(1.0).clamp(0.2, 3.0);
++    let clips = target_clips(s);
++    if clips.is_empty() {
++        return Err(bad("jarvis.clipFx", "nessuna clip: seleziona le clip o metti l'indicatore su una clip"));
++    }
++    let (w, h) = s.active_sequence().map(|q| (q.settings.width as f64, q.settings.height as f64)).unwrap_or((1920.0, 1080.0));
++    let rate = s.sequence_rate();
++    let f = rate.frame_duration();
++    let n = s.edit_sequence("Effetto Jarvis", |q, _ctx, _st| {
++        let mut n = 0;
++        for c in &clips {
++            let Some((_, it)) = q.find_item_mut(*c) else { continue };
++            let dur = it.duration;
++            let Some(m) = it.effect_mut("motion") else { continue };
++            let base = m.params.get("scale").map(|p| p.f64_at(Tick::ZERO)).unwrap_or(100.0);
++            let base_pos = m.params.get("position").map(|p| p.vec2_at(Tick::ZERO)).filter(|v| v.x.is_finite() && v.y.is_finite()).unwrap_or(Vec2::new(w / 2.0, h / 2.0));
++            match fx.as_str() {
++                "punch" => {
++                    let mut sp = Param::new(ParamValue::Float(base));
++                    sp.put_keyframe(Tick::ZERO, ParamValue::Float(base));
++                    sp.put_keyframe(Tick(f.0 * 3), ParamValue::Float(base * (1.0 + 0.18 * amount)));
++                    for k in &mut sp.keyframes {
++                        k.interp = Interpolation::EaseOut;
++                    }
++                    m.params.insert("scale".into(), sp);
++                }
++                "zoom_in" | "zoom_out" => {
++                    let (a, b) = if fx == "zoom_in" { (base, base * (1.0 + 0.1 * amount)) } else { (base * (1.0 + 0.1 * amount), base) };
++                    let mut sp = Param::new(ParamValue::Float(a));
++                    sp.put_keyframe(Tick::ZERO, ParamValue::Float(a));
++                    sp.put_keyframe(dur, ParamValue::Float(b));
++                    m.params.insert("scale".into(), sp);
++                }
++                "shake" => {
++                    let amp = w.min(h) * 0.018 * amount;
++                    let offs = [(1.0, -0.6), (-0.9, 0.8), (0.7, 0.5), (-0.5, -0.7), (0.35, 0.3), (-0.2, -0.15), (0.0, 0.0)];
++                    let mut pp = Param::new(ParamValue::Vec2(base_pos));
++                    for (k, (dx, dy)) in offs.iter().enumerate() {
++                        let t = Tick(f.0 * 2 * k as i64);
++                        if t > dur {
++                            break;
++                        }
++                        let decay = 1.0 - k as f64 / offs.len() as f64;
++                        pp.put_keyframe(t, ParamValue::Vec2(Vec2::new(base_pos.x + dx * amp * decay, base_pos.y + dy * amp * decay)));
++                    }
++                    m.params.insert("position".into(), pp);
++                    // un filo di zoom per non mostrare i bordi
++                    if m.params.get("scale").map_or(true, |p| !p.is_animated()) {
++                        m.params.insert("scale".into(), Param::new(ParamValue::Float(base * (1.0 + 0.05 * amount))));
++                    }
++                }
++                _ => return Err(bad("jarvis.clipFx", "preset sconosciuto")),
++            }
++            n += 1;
++        }
++        Ok(n)
++    })?;
++    Ok(json!({"clips": n}))
++}
++
++pub fn commands() -> Vec<CommandSpec> {
++    vec![
++        spec(
++            "jarvis.autoCaptions",
++            "Jarvis: Sottotitoli animati",
++            r#"{"style":"jarvis|hormozi|parola|beast|box|neon|minimal"?,"words":n?,"upper":bool?,"censor":bool=true,"pop":bool?,"y":f?,"size":percent?,"model":"whisper-small"?,"language":"it"?,"replace":bool=true,"retranscribe":bool?}"#,
++            auto_captions,
++        ),
++        spec(
++            "jarvis.transition",
++            "Jarvis: Transizione",
++            r#"{"preset":"zoom_blur|whip|cross_zoom|spin|push|shake|glitch|flash|light_leak|vhs|dissolve|mix","scope":"playhead|selection|all"?,"frames":n?}"#,
++            transition,
++        ),
++        spec("jarvis.clipFx", "Jarvis: Effetto clip", r#"{"preset":"punch|zoom_in|zoom_out|shake","amount":f?}"#, clip_fx),
++    ]
++}
+diff --git a/crates/engine/src/lib.rs b/crates/engine/src/lib.rs
+index cead3c7..3d04cce 100644
+--- a/crates/engine/src/lib.rs
++++ b/crates/engine/src/lib.rs
+@@ -23,6 +23,7 @@ pub mod export_tools;
+ pub mod graphic_templates;
+ pub mod graphics;
+ pub mod interchange;
++pub mod jarvis;
+ pub mod keyboard;
+ mod keyframe_move;
+ mod marker_edit;
 diff --git a/crates/engine/src/project_tools.rs b/crates/engine/src/project_tools.rs
 index 5a91987..7de3d1d 100644
 --- a/crates/engine/src/project_tools.rs
@@ -106,6 +650,30 @@ index 5a91987..7de3d1d 100644
      "trim.edit",
      "sequence.applyVideoTransition",
      "sequence.applyAudioTransition",
+diff --git a/crates/ui-egui/src/app.rs b/crates/ui-egui/src/app.rs
+index 250a7e2..392f4cf 100644
+--- a/crates/ui-egui/src/app.rs
++++ b/crates/ui-egui/src/app.rs
+@@ -47,6 +47,7 @@ impl FilmcraftApp {
+             // Unsaved changes left by a session that died are offered first thing.
+             dialog: recovery.then_some(Dialog::Recovery),
+             updates_rt: Default::default(),
++            jarvis_ui: Default::default(),
+             file_dialogs: Default::default(),
+             native_dialog: None,
+             overwrite_prompt: None,
+diff --git a/crates/ui-egui/src/app/frame.rs b/crates/ui-egui/src/app/frame.rs
+index e1a7428..22aa228 100644
+--- a/crates/ui-egui/src/app/frame.rs
++++ b/crates/ui-egui/src/app/frame.rs
+@@ -76,6 +76,7 @@ impl FilmcraftApp {
+         panels::dialogs::show(self, &ctx);
+         panels::file_dialogs::show_overwrite(self, &ctx);
+         updates_ui::show(self, &ctx);
++        crate::jarvis_ui::show(self, &ctx);
+         if !self.ui.show_status_bar {
+             return;
+         }
 diff --git a/crates/ui-egui/src/i18n/it.tsv b/crates/ui-egui/src/i18n/it.tsv
 index fd5f66c..fc6ef4d 100644
 --- a/crates/ui-egui/src/i18n/it.tsv
@@ -118,3 +686,256 @@ index fd5f66c..fc6ef4d 100644
  	Add Flash Cue Marker…	Aggiungi marcatore Flash Cue…
  	Add Frame Hold	Aggiungi fermo immagine
  	Add Guide…	Aggiungi guida…
+diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
+new file mode 100644
+index 0000000..ea1a38d
+--- /dev/null
++++ b/crates/ui-egui/src/jarvis_ui.rs
+@@ -0,0 +1,191 @@
++//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
++
++use serde_json::{Value, json};
++
++use crate::FilmcraftApp;
++use filmcraft_engine::jarvis::{CLIP_FX, STYLES, TRANSITIONS};
++
++pub(crate) struct State {
++    pub open: bool,
++    style: usize,
++    /// 0 = quante ne usa lo stile
++    words: u32,
++    upper: bool,
++    censor: bool,
++    pop: bool,
++    y: f32,
++    size: f32,
++    precise: bool,
++    retranscribe: bool,
++    scope: usize,
++    amount: f32,
++    msg: String,
++    /// comando da eseguire al prossimo frame (così il messaggio "attendi" si vede prima)
++    pending: Option<(String, Value, bool)>,
++}
++
++impl Default for State {
++    fn default() -> Self {
++        Self {
++            open: false,
++            style: 0,
++            words: 0,
++            upper: true,
++            censor: true,
++            pop: true,
++            y: 0.0,
++            size: 100.0,
++            precise: true,
++            retranscribe: false,
++            scope: 0,
++            amount: 1.0,
++            msg: String::new(),
++            pending: None,
++        }
++    }
++}
++
++const SCOPES: [(&str, &str); 3] = [("playhead", "Taglio vicino all'indicatore"), ("selection", "Clip selezionate"), ("all", "Tutti i tagli (V1)")];
++
++pub(crate) fn toggle(app: &mut FilmcraftApp) {
++    app.jarvis_ui.open = !app.jarvis_ui.open;
++}
++
++pub(crate) fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
++    // esegue il comando in attesa (al secondo frame, dopo aver mostrato "attendi")
++    if let Some((cmd, p, armed)) = app.jarvis_ui.pending.take() {
++        if armed {
++            let r = crate::menus::invoke(app, ctx, &cmd, p);
++            app.jarvis_ui.msg = match r {
++                Ok(v) => done_msg(&cmd, &v),
++                Err(e) => format!("⚠ {e}"),
++            };
++        } else {
++            app.jarvis_ui.pending = Some((cmd, p, true));
++            ctx.request_repaint();
++        }
++    }
++    if !app.jarvis_ui.open {
++        return;
++    }
++    let mut open = true;
++    let mut run: Option<(String, Value, String)> = None;
++    let st = &mut app.jarvis_ui;
++    egui::Window::new("Jarvis Composer")
++        .open(&mut open)
++        .resizable(false)
++        .default_width(360.0)
++        .default_pos(ctx.content_rect().right_top() + egui::vec2(-400.0, 80.0))
++        .show(ctx, |ui| {
++            ui.heading("🔤 Sottotitoli animati");
++            egui::ComboBox::from_id_salt("jarvis_style").width(220.0).selected_text(STYLES[st.style.min(STYLES.len() - 1)].name).show_ui(ui, |ui| {
++                for (i, s) in STYLES.iter().enumerate() {
++                    ui.selectable_value(&mut st.style, i, s.name);
++                }
++            });
++            ui.horizontal(|ui| {
++                ui.label("Parole per volta");
++                ui.add(egui::Slider::new(&mut st.words, 0..=6).custom_formatter(|v, _| if v == 0.0 { "auto".into() } else { format!("{v}") }));
++            });
++            ui.horizontal(|ui| {
++                ui.checkbox(&mut st.upper, "MAIUSCOLO");
++                ui.checkbox(&mut st.pop, "Pop");
++                ui.checkbox(&mut st.censor, "Censura parolacce");
++            });
++            ui.horizontal(|ui| {
++                ui.label("Altezza");
++                ui.add(egui::Slider::new(&mut st.y, 0.0..=95.0).custom_formatter(|v, _| if v == 0.0 { "auto".into() } else { format!("{v:.0}%") }));
++            });
++            ui.horizontal(|ui| {
++                ui.label("Grandezza");
++                ui.add(egui::Slider::new(&mut st.size, 40.0..=200.0).suffix("%"));
++            });
++            ui.horizontal(|ui| {
++                ui.checkbox(&mut st.precise, "Trascrizione precisa");
++                ui.checkbox(&mut st.retranscribe, "Ritrascrivi");
++            });
++            if ui.add_sized([ui.available_width(), 30.0], egui::Button::new("✨ Crea sottotitoli")).clicked() {
++                let mut p = json!({
++                    "style": STYLES[st.style.min(STYLES.len() - 1)].id, "upper": st.upper, "pop": st.pop, "censor": st.censor,
++                    "size": st.size, "model": if st.precise { "whisper-small" } else { "whisper-base" }, "language": "it",
++                    "retranscribe": st.retranscribe,
++                });
++                if st.words > 0 {
++                    p["words"] = json!(st.words);
++                }
++                if st.y > 0.0 {
++                    p["y"] = json!(st.y / 100.0);
++                }
++                run = Some((
++                    "jarvis.autoCaptions".into(),
++                    p,
++                    "⏳ Trascrivo e creo i sottotitoli… (la prima volta scarica il modello: FilmCraft resta fermo qualche minuto)".into(),
++                ));
++            }
++            ui.small("Finiscono sulla traccia \"Sottotitoli Jarvis\": ogni pezzo si modifica come un testo normale.");
++            ui.separator();
++
++            ui.heading("🎬 Transizioni");
++            egui::ComboBox::from_id_salt("jarvis_scope").width(220.0).selected_text(SCOPES[st.scope].1).show_ui(ui, |ui| {
++                for (i, (_, n)) in SCOPES.iter().enumerate() {
++                    ui.selectable_value(&mut st.scope, i, *n);
++                }
++            });
++            egui::Grid::new("jarvis_tr").num_columns(3).spacing([6.0, 6.0]).show(ui, |ui| {
++                let mut k = 0;
++                for tp in TRANSITIONS.iter().map(|t| (t.id, t.name)).chain(std::iter::once(("mix", "🎲 Mix casuale"))) {
++                    if ui.add_sized([108.0, 26.0], egui::Button::new(tp.1)).clicked() {
++                        run = Some(("jarvis.transition".into(), json!({"preset": tp.0, "scope": SCOPES[st.scope].0}), String::new()));
++                    }
++                    k += 1;
++                    if k % 3 == 0 {
++                        ui.end_row();
++                    }
++                }
++            });
++            ui.separator();
++
++            ui.heading("💥 Effetti sulla clip");
++            ui.horizontal(|ui| {
++                ui.label("Intensità");
++                ui.add(egui::Slider::new(&mut st.amount, 0.3..=2.5));
++            });
++            ui.horizontal_wrapped(|ui| {
++                for (id, name) in CLIP_FX {
++                    if ui.button(*name).clicked() {
++                        run = Some(("jarvis.clipFx".into(), json!({"preset": id, "amount": st.amount}), String::new()));
++                    }
++                }
++            });
++            ui.small("Vale per le clip selezionate, o per quella sotto l'indicatore.");
++            if !st.msg.is_empty() {
++                ui.separator();
++                ui.label(&st.msg);
++            }
++        });
++    if !open {
++        app.jarvis_ui.open = false;
++    }
++    if let Some((cmd, p, wait)) = run {
++        if wait.is_empty() {
++            let r = crate::menus::invoke(app, ctx, &cmd, p);
++            app.jarvis_ui.msg = match r {
++                Ok(v) => done_msg(&cmd, &v),
++                Err(e) => format!("⚠ {e}"),
++            };
++        } else {
++            app.jarvis_ui.msg = wait;
++            app.jarvis_ui.pending = Some((cmd, p, false));
++            ctx.request_repaint();
++        }
++    }
++}
++
++fn done_msg(cmd: &str, v: &Value) -> String {
++    match cmd {
++        "jarvis.autoCaptions" => format!("✅ Creati {} pezzi di sottotitoli", v["captions"].as_u64().unwrap_or(0)),
++        "jarvis.transition" => format!("✅ Transizioni messe: {}", v["transitions"].as_u64().unwrap_or(0)),
++        "jarvis.clipFx" => format!("✅ Effetto applicato a {} clip", v["clips"].as_u64().unwrap_or(0)),
++        _ => "✅ Fatto".into(),
++    }
++}
+diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
+index c3fb34a..414df00 100644
+--- a/crates/ui-egui/src/lib.rs
++++ b/crates/ui-egui/src/lib.rs
+@@ -73,6 +73,7 @@ pub mod state;
+ pub mod theme;
+ mod theme_favorites;
+ pub mod updates_ui;
++pub(crate) mod jarvis_ui;
+ pub mod widgets;
+ 
+ use std::collections::HashMap;
+@@ -215,6 +216,7 @@ pub struct FilmcraftApp {
+     pub hooks: HostHooks,
+     pub dialog: Option<Dialog>,
+     pub(crate) updates_rt: updates_ui::Runtime,
++    pub(crate) jarvis_ui: jarvis_ui::State,
+     pub file_dialogs: panels::file_dialogs::FileDialogState,
+     /// The native file dialog the host is showing ([`Self::pick`]).
+     native_dialog: Option<native_dialogs::PendingDialog>,
+diff --git a/crates/ui-egui/src/menus.rs b/crates/ui-egui/src/menus.rs
+index 5f1e294..773f599 100644
+--- a/crates/ui-egui/src/menus.rs
++++ b/crates/ui-egui/src/menus.rs
+@@ -117,6 +117,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
+     uic!("view.theme.medium", "Dark", ["View", "Appearance"], None),
+     uic!("view.theme.light", "Light", ["View", "Appearance"], None),
+     uic!("view.appearanceMode.next", "Next Appearance Mode", ["View", "Appearance"], None),
++    uic!("jarvis.composerWindow", "Jarvis Composer", ["Window"], Some("Alt+Shift+J")),
+     uic!("window.workspace.editing", "Editing", ["Window", "Workspaces"], Some("Alt+Shift+1")),
+     uic!("window.workspace.assembly", "Assembly", ["Window", "Workspaces"], Some("Alt+Shift+2")),
+     uic!("window.workspace.color", "Color", ["Window", "Workspaces"], Some("Alt+Shift+3")),
+@@ -523,6 +524,10 @@ pub fn invoke_command(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut
+             app.ui.mode = Mode::Export;
+             return Ok(Value::Null);
+         }
++        "jarvis.composerWindow" => {
++            crate::jarvis_ui::toggle(app);
++            return Ok(Value::Null);
++        }
+         "app.checkForUpdates" => {
+             let _ = crate::updates_ui::check(app);
+             return Ok(serde_json::Value::Null);
+diff --git a/packaging/windows/package.ps1 b/packaging/windows/package.ps1
+index 0569139..2de011f 100644
+--- a/packaging/windows/package.ps1
++++ b/packaging/windows/package.ps1
+@@ -63,7 +63,7 @@ if (-not $SkipBuild) {
+   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
+   $env:FILMCRAFT_REQUIRE_WINRES = '1'
+   # Official packages include Kokoro natural voices (downloaded on first use). #2318 #3773
+-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p filmcraft -p filmcraft-cli --features filmcraft/neural-voices --target $Target }
++  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p filmcraft -p filmcraft-cli --features filmcraft/neural-voices,filmcraft/whisper --target $Target }
+ }
+ 
+ $Bin = Join-Path $TargetDir "$Target\release"
