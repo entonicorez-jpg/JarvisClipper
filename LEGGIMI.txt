@@ -1,0 +1,31 @@
+JARVIS CLIPPER - trova le clip virali dei tuoi VOD
+===================================================
+
+AVVIO
+  Doppio clic su AVVIA_JARVIS_CLIPPER.bat
+  La prima volta installa tutto da solo (qualche minuto), poi si apre il browser.
+  Chiudi la finestra nera per spegnerlo.
+
+COME SI USA
+  1. Incolla il link di un VOD Kick (kick.com/mrjakelive/videos/...) oppure "Scegli file" per una registrazione.
+     I VOD scaricati finiscono in: Video\JarvisClipper\VOD
+  2. Sistema i riquadri: ROSSO = la tua cam (andra' sopra), VERDE = il gioco (andra' sotto).
+     A destra vedi subito come verra' la clip verticale. "Trova la cam da solo" cerca la tua faccia.
+  3. "Trova le clip virali": ogni clip riceve un punteggio 0-100 con i motivi
+     (urla/reazioni, calma->esplosione, risate, parole da reazione, "clippatelo", azione nel gioco, hook).
+  4. Passa il mouse sull'anteprima per vederla, clic per vederla grande con audio.
+     Aggiusta inizio/fine con -5 -1 +1 +5: l'anteprima si rigenera.
+  5. Spunta le clip e premi "Esporta in Premiere".
+     Nella cartella <nome video>_JarvisClips trovi:
+       - gli MP4 verticali 1080x1920 gia' pronti
+       - il file .xml: in Premiere  File > Importa > scegli l'xml
+         Ogni clip e' una sequenza 1080x1920 con V1 GIOCO, V2 CAM (ritaglio, scala e posizione
+         modificabili in Controllo effetti), V3 la versione gia' montata spenta come riferimento, A1/A2 audio.
+
+NOTE
+  - La prima analisi scarica il modello Whisper (circa 500 MB per "Bilanciata").
+  - VOD lunghi: l'analisi audio e' veloce; la parte lenta e' capire il parlato dei momenti candidati.
+    Con una scheda video NVIDIA va molto piu' veloce.
+  - Facoltativo: in Impostazioni puoi mettere una chiave API di Claude per far rivalutare le clip anche
+    da un'AI (titolo e testo hook inclusi).
+  - Il punteggio e' una stima: aiuta a trovare i momenti migliori, la scelta finale e' tua.

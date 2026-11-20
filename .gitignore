@@ -1,0 +1,8 @@
+.venv/
+progetti/
+config.json
+dist/
+build/
+Output/
+__pycache__/
+*.spec

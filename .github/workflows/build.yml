@@ -1,0 +1,66 @@
+name: Build Windows installer
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pywebview pyinstaller
+
+      - name: Build app (PyInstaller)
+        run: >
+          pyinstaller desktop.py --name JarvisClipper --windowed --noconfirm --onedir
+          --icon assets/icon.ico
+          --add-data "static;static"
+          --hidden-import selftest
+          --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime
+          --collect-all av --collect-all tokenizers
+          --collect-all yt_dlp --collect-all curl_cffi --collect-all imageio_ffmpeg
+          --collect-all webview --collect-all cv2
+
+      - name: Self-test of the built app
+        shell: pwsh
+        run: |
+          $out = "$env:RUNNER_TEMP\selftest.txt"
+          $p = Start-Process -FilePath "dist\JarvisClipper\JarvisClipper.exe" -ArgumentList "--selftest", "`"$out`"" -Wait -PassThru
+          Get-Content $out
+          if ($p.ExitCode -ne 0) { Write-Error "Selftest fallito (exit $($p.ExitCode))"; exit 1 }
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          & $iscc /DAppVer=1.0.${{ github.run_number }} installer.iss
+          Get-Item Output\JarvisClipperSetup.exe | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JarvisClipperSetup
+          path: Output/JarvisClipperSetup.exe
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Jarvis Clipper 1.0.${{ github.run_number }}
+          files: Output/JarvisClipperSetup.exe
+          make_latest: true
