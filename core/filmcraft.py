@@ -32,10 +32,11 @@ def latest(force=False):
         return _cache["data"]
     res = {"tag": None, "url": None, "size": 0, "error": None}
     try:
-        req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases?per_page=40", headers=_UA)
+        req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases?per_page=100", headers=_UA)
         with urllib.request.urlopen(req, timeout=15) as r:
             rels = json.loads(r.read())
-        rel = next((x for x in rels if x.get("tag_name", "").startswith("filmcraft-jarvis-") and not x.get("draft")), None)
+        rels = [x for x in rels if x.get("tag_name", "").startswith("filmcraft-jarvis-") and not x.get("draft")]
+        rel = max(rels, key=lambda x: x.get("published_at") or x.get("created_at") or "", default=None)
         if rel:
             a = next((a for a in rel.get("assets", []) if a["name"].lower().endswith(".zip")), None)
             if a:
