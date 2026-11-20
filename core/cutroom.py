@@ -193,15 +193,16 @@ STATE = {"running": False, "progress": 0.0, "msg": "", "error": None}
 
 
 def find_launcher(root=INSTALL_DIR):
-    """Il file di avvio di CUTROOM dentro la cartella installata."""
+    """Il file di avvio di CUTROOM:
+    - zip ufficiale: 'START CUTROOM.bat' con accanto la cartella 'App'
+    - codice sorgente: 'run_windows.bat' nella cartella che contiene server.py"""
     best = None
-    for d, _, files in os.walk(root):
-        for f in files:
-            lf = f.lower()
-            if lf in ("start cutroom.bat", "start cutroom desktop.cmd", "run_windows.bat") or (lf.startswith("start") and "cutroom" in lf and lf.endswith((".bat", ".cmd"))):
-                cand = os.path.join(d, f)
-                if best is None or ("desktop" in lf and "desktop" not in best.lower()) or lf == "start cutroom.bat":
-                    best = cand
+    for d, dirs, files in os.walk(root):
+        low = {f.lower(): f for f in files}
+        if "start cutroom.bat" in low and any(x.lower() == "app" for x in dirs):
+            return os.path.join(d, low["start cutroom.bat"])
+        if "run_windows.bat" in low and "server.py" in low and best is None:
+            best = os.path.join(d, low["run_windows.bat"])
     return best
 
 
@@ -215,29 +216,46 @@ def status(base="http://127.0.0.1:8765"):
             "install": dict(STATE)}
 
 
+def _gh(path):
+    req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/{path}",
+                                 headers={"User-Agent": "JarvisClipper", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read())
+
+
+def pick_download():
+    """-> (url, nome, versione). Pacchetto Windows da una release (anche beta) oppure il codice sorgente dell'ultima versione."""
+    try:
+        for rel in _gh("releases?per_page=15"):
+            zips = [a for a in rel.get("assets", []) if a["name"].lower().endswith(".zip")]
+            win = [a for a in zips if "win" in a["name"].lower()] or [a for a in zips if "mac" not in a["name"].lower()]
+            if win:
+                return win[0]["browser_download_url"], win[0]["name"], rel.get("tag_name", "")
+    except Exception:
+        pass
+    try:
+        tags = _gh("tags?per_page=30")
+        tag = next((t["name"] for t in tags if "beta" in t["name"].lower() or t["name"].lower().startswith("v")), tags[0]["name"])
+        return f"https://codeload.github.com/{REPO}/zip/refs/tags/{tag}", f"cutroom-{tag}.zip", tag
+    except Exception:
+        return f"https://codeload.github.com/{REPO}/zip/refs/heads/master", "cutroom-master.zip", "master"
+
+
 def install():
-    """Scarica l'ultima versione Windows di CUTROOM da GitHub e la scompatta in INSTALL_DIR."""
+    """Scarica CUTROOM per Windows e lo scompatta in INSTALL_DIR (al primo avvio installa da solo Python e FFmpeg)."""
     import zipfile
     STATE.update(running=True, progress=0.0, error=None, msg="Cerco l'ultima versione di CUTROOM…")
     try:
-        req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/latest",
-                                     headers={"User-Agent": "JarvisClipper", "Accept": "application/vnd.github+json"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            rel = json.loads(r.read())
-        zips = [a for a in rel.get("assets", []) if a["name"].lower().endswith(".zip")]
-        win = [a for a in zips if "win" in a["name"].lower()] or [a for a in zips if "mac" not in a["name"].lower()] or zips
-        if not win:
-            raise CutroomError("Non trovo il pacchetto Windows di CUTROOM nell'ultima versione")
-        asset = win[0]
-        tmp = os.path.join(tempfile.gettempdir(), asset["name"])
-        with urllib.request.urlopen(urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": "JarvisClipper"}), timeout=60) as r, open(tmp, "wb") as f:
-            tot = int(r.headers.get("Content-Length") or asset.get("size") or 0); done = 0
+        url, name, tag = pick_download()
+        tmp = os.path.join(tempfile.gettempdir(), name)
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "JarvisClipper"}), timeout=60) as r, open(tmp, "wb") as f:
+            tot = int(r.headers.get("Content-Length") or 0); done = 0
             while True:
                 b = r.read(1 << 20)
                 if not b:
                     break
                 f.write(b); done += len(b)
-                STATE.update(progress=0.9 * done / max(1, tot), msg=f"Scarico CUTROOM {rel.get('tag_name', '')}… {done / 1e6:.0f} MB")
+                STATE.update(progress=0.9 * done / tot if tot else 0.5, msg=f"Scarico CUTROOM {tag}… {done / 1e6:.0f} MB")
         STATE.update(msg="Scompatto CUTROOM…")
         os.makedirs(INSTALL_DIR, exist_ok=True)
         with zipfile.ZipFile(tmp) as z:
@@ -245,14 +263,14 @@ def install():
         os.remove(tmp)
         if not find_launcher():
             raise CutroomError("CUTROOM scaricato ma non trovo il file di avvio")
-        STATE.update(progress=1.0, msg=f"CUTROOM {rel.get('tag_name', '')} installato")
+        STATE.update(progress=1.0, msg=f"CUTROOM {tag} installato: ora premi Avvia")
     except Exception as e:
         STATE.update(error=str(e), msg="Errore: " + str(e))
     finally:
         STATE["running"] = False
 
 
-def start(base="http://127.0.0.1:8765", wait=240, progress=lambda m: None):
+def start(base="http://127.0.0.1:8765", wait=900, progress=lambda m: None):
     """Avvia CUTROOM se non è già aperto e aspetta che risponda (la prima volta installa Python/FFmpeg: ci vuole un po')."""
     if status(base)["running"]:
         return True
