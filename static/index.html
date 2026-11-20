@@ -176,6 +176,11 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
   <button onclick="openCfg()">⚙ Impostazioni</button>
 </header>
 
+<div id="upd" class="hidden" style="background:linear-gradient(90deg,#0f2414,#0b1d26);border-bottom:1px solid #2f6d1f;padding:10px 26px;display:flex;gap:14px;align-items:center">
+  <b>🎉 Nuova versione di Jarvis disponibile</b><span id="updTxt" class="hint"></span><div style="flex:1"></div>
+  <div class="bar" style="width:220px;margin:0" id="updBarBox"><i id="updBar"></i></div>
+  <button class="pri sm" id="updBtn" onclick="doUpdate()">Aggiorna ora</button><button class="sm" onclick="$('#upd').classList.add('hidden')">Più tardi</button>
+</div>
 <main>
   <!-- HOME -->
   <section id="home">
@@ -294,9 +299,10 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
         </div>
         <div class="panel">
           <h4>Come lo voglio</h4>
-          <label class="field">Ritmo dei tagli <select id="eRitmo"><option value="tranquillo">Tranquillo (taglia solo le pause lunghe)</option><option value="normale" selected>Normale</option><option value="veloce">Veloce (stile YouTube serrato)</option></select></label>
+          <label class="field">Quanti tagli <select id="eRitmo"><option value="tranquillo">Pochi · solo le pause lunghe</option><option value="normale">Normali</option><option value="veloce" selected>Tanti · stile YouTube</option><option value="jumpcut">Tantissimi · jump cut a ogni respiro</option></select></label>
           <label class="field">Forza dello zoom <select id="eZoom"><option value="leggero">Leggero · 118%</option><option value="normale" selected>Normale · 132%</option><option value="forte">Forte · 150%</option></select></label>
-          <label class="field">Quanti zoom <select id="eSens"><option value="0.8">Solo le reazioni più forti</option><option value="1" selected>Normale</option><option value="1.25">Tanti</option></select></label>
+          <label class="field">Quanti zoom <select id="eDens"><option value="pochi">Pochi · solo le reazioni forti</option><option value="normali">Normali · reazioni + qualche zoom a ritmo</option><option value="tanti" selected>Tanti · reazioni + zoom ogni 2 clip</option><option value="ogni_frase">Ogni frase · alterna zoom a ogni clip</option></select></label>
+          <div class="hint" style="margin:-4px 0 10px">Jarvis ascolta dove parli (rilevamento voce) per tagliare, e mette lo zoom con motion blur dove alzi la voce o reagisci. Gli zoom "a ritmo" entrano con uno stacco netto.</div>
           <label class="tog"><input type="checkbox" id="eFull" checked> Cam quasi a tutto schermo sulle reazioni più forti</label>
           <label class="tog"><input type="checkbox" id="eBlur" checked> Motion blur quando lo zoom entra</label>
           <label class="tog"><input type="checkbox" id="eOutBlur" checked> Anche l'uscita animata (se no: stacco netto)</label>
@@ -309,7 +315,7 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
 
     <!-- 4b: EDITOR -->
     <div class="view hidden" id="vEditor">
-      <div class="vtitle"><div><h2>✂️ Editor</h2><p>Sistema tagli e zoom, poi esporta. <span class="kbd">Spazio</span> play · <span class="kbd">Z</span> zoom qui · <span class="kbd">S</span> spezza · <span class="kbd">Canc</span> elimina · <span class="kbd">Ctrl+Z</span> annulla</p></div>
+      <div class="vtitle"><div><h2>✂️ Editor</h2><p>Clicca una clip e premi <span class="kbd">Z</span> (zoom) o <span class="kbd">X</span> (cam piena) · <span class="kbd">]</span> allunga lo zoom alla clip dopo · <span class="kbd">S</span> spezza · <span class="kbd">Canc</span> elimina · <span class="kbd">Ctrl+Z</span> annulla · <span class="kbd">Spazio</span> play</p></div>
         <div class="sp"></div><button onclick="goStatus('edit_setup')">⚙ Cam e opzioni</button><button onclick="goStatus('choose')">← Indietro</button></div>
       <div class="ed">
         <div>
@@ -319,12 +325,12 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
             <div class="seg" id="ePrevSeg"><button data-m="1" class="on">Montato</button><button data-m="0">Originale</button></div>
             <span class="tc" id="eTc"></span>
             <div style="flex:1"></div>
-            <button onclick="edAddZoom()">🔍 + Zoom qui</button>
+            <button onclick="edAddZoom(null,1)">🔍 Zoom su questa clip</button>
             <button onclick="edSplit()">✂ Spezza qui</button>
             <button onclick="edUndo()" title="Ctrl+Z">↶</button><button onclick="edRedo()" title="Ctrl+Y">↷</button>
           </div>
           <div class="etl" id="etlBox"><canvas id="etl" height="190"></canvas></div>
-          <div class="zoombar">🔎 Zoom timeline <input type="range" id="eZoomTl" min="0" max="100" value="0"> <span class="hint">Rotellina = zoom · Shift+rotellina = scorri · trascina gli zoom per spostarli, i bordi per allungarli · doppio clic sulla corsia ZOOM per aggiungerne uno</span></div>
+          <div class="zoombar">🔎 Zoom timeline <input type="range" id="eZoomTl" min="0" max="100" value="0"> <span class="hint">Rotellina = zoom · Shift+rotellina = scorri · trascina gli zoom per spostarli, i bordi per allungarli · clic sulla corsia ZOOM = scegli la clip, doppio clic = zoom su quella clip</span></div>
         </div>
         <div>
           <div class="panel"><h4>Risultato</h4><div class="stats" id="eStats"></div></div>
@@ -369,6 +375,9 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
     <div id="gpuInfo" style="color:var(--mut);font-size:13px;margin:6px 0 8px">…</div>
     <button class="sm" id="gpuBtn" onclick="gpuInstall()">Attiva GPU (scarica circa 1,5 GB una volta sola)</button>
     <div class="bar"><i id="gpuBar"></i></div>
+  </div>
+  <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:14px;display:flex;gap:10px;align-items:center">
+    <span class="hint" id="verTxt">Versione…</span><div style="flex:1"></div><button class="sm" onclick="checkUpdate(true)">Controlla aggiornamenti</button>
   </div>
   <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
     <button onclick="clearKey()">Rimuovi chiave</button>
@@ -696,7 +705,7 @@ function camEditInit(){
   im.onload=camDraw;im.src=`/p/${PID}/${P.frames[cFrame]}`;
   $('#eNoCam').checked=!P.edit_cam&&!!P.edit;
   const o=(P.edit&&P.edit.opts)||{};
-  if(o.ritmo)$('#eRitmo').value=o.ritmo; if(o.zoom)$('#eZoom').value=o.zoom; if(o.sens)$('#eSens').value=String(o.sens);
+  if(o.ritmo)$('#eRitmo').value=o.ritmo; if(o.zoom)$('#eZoom').value=o.zoom; if(o.densita)$('#eDens').value=o.densita;
   if(o.full_cam!=null)$('#eFull').checked=o.full_cam; if(o.blur!=null)$('#eBlur').checked=o.blur; if(o.out)$('#eOutBlur').checked=o.out==='blur';
 }
 function cpos(e){const b=$('#cov').getBoundingClientRect(),k=P.info.w/b.width;return{x:(e.clientX-b.left)*k,y:(e.clientY-b.top)*k,k}}
@@ -712,7 +721,7 @@ $('#eNoCam').addEventListener('change',()=>{camDraw();camSave()});
 async function autoCamEdit(){const r=await api(`/api/project/${PID}/autocam`,{split:0.4});
   if(r.cam){CE.cam=r.cam;$('#eNoCam').checked=false;camDraw();camSave()}else alert('Non ho trovato la faccia: disegna il riquadro a mano.')}
 async function startEdit(){await camSave();
-  const r=await api(`/api/project/${PID}/edit/analyze`,{ritmo:$('#eRitmo').value,zoom:$('#eZoom').value,sens:+$('#eSens').value,
+  const r=await api(`/api/project/${PID}/edit/analyze`,{ritmo:$('#eRitmo').value,zoom:$('#eZoom').value,densita:$('#eDens').value,
     full_cam:$('#eFull').checked,blur:$('#eBlur').checked,out:$('#eOutBlur').checked?'blur':'netto'});
   if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else{ED=null;$('#jobbar').classList.remove('hidden')}}
 
@@ -749,9 +758,9 @@ function zoomState(t){
   const z=ED.zooms.find(q=>t>=q.s&&t<q.e);if(!z||!keepAt(t))return{z:1,blur:0,v:null};
   const v=zoomView(z.lv);if(!v)return{z:1,blur:0};const zn=zoneOf(z)||[z.s,z.e];
   let zz=v.S,bl=0;
-  if(ED.blur){const p=clamp((t-zn[0])/T_IN,0,1);if(p<1){zz=1+(v.S-1)*(1-Math.pow(1-p,3));bl=(1-p)*14}
+  if(ED.blur&&z.fx!=='cut'){const p=clamp((t-zn[0])/T_IN,0,1);if(p<1){zz=1+(v.S-1)*(1-Math.pow(1-p,3));bl=(1-p)*14}
     if(ED.out==='blur'){const q=clamp((zn[1]-t)/T_OUT,0,1);if(q<1){const zo=v.S-(v.S-1)*Math.pow(1-q,2);if(zo<zz){zz=zo;bl=Math.max(bl,(1-q)*10)}}}}
-  return{z:zz,blur:bl,v,lv:z.lv}}
+  return{z:zz,blur:bl,v,lv:z.lv,fx:z.fx}}
 function srcToEdited(t){let acc=0;for(const [a,b] of ED.keep){if(t>=b)acc+=b-a;else{if(t>a)acc+=t-a;break}}return acc}
 function edTick(){
   raf=requestAnimationFrame(edTick);if(!ED||VIEW!=='vEditor')return;
@@ -792,12 +801,16 @@ function edDraw(){
     if(x1-x0>14){x.fillStyle='#0c2a06';x.fillRect(x0,cy+3,2,ch-6);x.fillRect(x1-3,cy+3,2,ch-6)}});
   if(sel&&sel.type==='gap'){x.strokeStyle='#ff3d5a';x.lineWidth=2;x.strokeRect(tl.x(sel.a),cy+2,tl.x(sel.b)-tl.x(sel.a),ch-4)}
   // corsia zoom
-  x.fillStyle='#14181e';x.fillRect(0,zy,W,zh);
-  ED.zooms.forEach((z,i)=>{if(z.e<tl.a||z.s>tl.b)return;const x0=tl.x(z.s),x1=tl.x(z.e),isSel=sel&&sel.type==='zoom'&&sel.id===z.id;
-    x.fillStyle=z.lv===2?(isSel?'#ff7a90':'#d92f4b'):(isSel?'#ffd36b':'#e09a1a');x.beginPath();x.roundRect(x0,zy+5,Math.max(3,x1-x0),zh-10,6);x.fill();
+  x.fillStyle='#0f1216';x.fillRect(0,zy,W,zh);
+  // sagome delle clip anche nella corsia zoom: lo zoom si aggancia a queste
+  ED.keep.forEach((k,i)=>{if(k[1]<tl.a||k[0]>tl.b)return;const x0=tl.x(k[0]),x1=tl.x(k[1]);const isSel=sel&&sel.type==='keep'&&sel.i===i;
+    x.fillStyle=isSel?'#24402a':'#1b2028';x.fillRect(x0+1,zy+3,Math.max(1,x1-x0-2),zh-6);
+    if(isSel){x.strokeStyle='#53fc18';x.setLineDash([4,3]);x.lineWidth=1.5;x.strokeRect(x0+1,zy+3,x1-x0-2,zh-6);x.setLineDash([])}});
+  ED.zooms.forEach((z,i)=>{if(z.e<tl.a||z.s>tl.b)return;const x0=tl.x(z.s),x1=tl.x(z.e),isSel=sel&&sel.type==='zoom'&&sel.id===z.id,cut=z.fx==='cut';
+    x.fillStyle=z.lv===2?(isSel?'#ff7a90':'#d92f4b'):(cut?(isSel?'#ffe7a3':'#c9a24a'):(isSel?'#ffd36b':'#e09a1a'));x.beginPath();x.roundRect(x0,zy+6,Math.max(3,x1-x0),zh-12,6);x.fill();
     if(isSel){x.strokeStyle='#fff';x.lineWidth=2;x.stroke()}
-    x.fillStyle='#000a';const ti=Math.min(x1-x0,Math.max(0,tl.x(z.s+T_IN)-x0));if(ED.blur)x.fillRect(x0,zy+5,ti,zh-10);
-    if(x1-x0>46){x.fillStyle='#111';x.font='bold 11px Segoe UI';x.fillText(z.lv===2?'CAM PIENA':'ZOOM',x0+8,zy+zh/2+4)}});
+    if(ED.blur&&!cut){x.fillStyle='#0008';const ti=Math.min(x1-x0,Math.max(3,tl.x(z.s+T_IN)-x0));x.fillRect(x0,zy+6,ti,zh-12)}
+    if(x1-x0>40){x.fillStyle='#111';x.font='bold 11px Segoe UI';x.fillText((z.lv===2?'CAM PIENA':'ZOOM')+(x1-x0>110?(cut?' · netto':' · blur'):''),x0+8,zy+zh/2+4)}});
   // etichette corsie
   x.font='bold 10px Segoe UI';
   for(const [nm,[y]] of [['AUDIO',LANES.audio],['TAGLI',LANES.cut],['ZOOM',LANES.zoom]]){x.fillStyle='#0b0d10cc';x.fillRect(0,y,46,14);x.fillStyle='#8b94a3';x.fillText(nm,5,y+11)}
@@ -817,7 +830,8 @@ function edHit(xp,yp){const tl=ED.tl,t=tl.t(xp),tol=7*(tl.b-tl.a)/tl.W;
   return{type:'seek',t}}
 etl.onmousemove=e=>{if(edrag||!ED)return;const h=edHit(e.offsetX,e.offsetY);etl.style.cursor=(h.edge!=null&&h.edge!==undefined&&(h.type==='zoom'||h.type==='keep'))?'ew-resize':(h.type==='zoom'?'grab':'pointer')};
 etl.onmousedown=e=>{if(!ED)return;const h=edHit(e.offsetX,e.offsetY),v=$('#ev');
-  if(h.type==='seek'||h.type==='zoomlane'){v.currentTime=clamp(h.t,ED.range[0],ED.range[1]);edrag={type:'seek'};if(h.type==='zoomlane'){sel=null;edInsp()}return}
+  if(h.type==='zoomlane'){const i=ED.keep.findIndex(k=>h.t>=k[0]&&h.t<k[1]);sel=i>=0?{type:'keep',i}:null;v.currentTime=clamp(h.t,ED.range[0],ED.range[1]);edInsp();edDraw();return}
+  if(h.type==='seek'){v.currentTime=clamp(h.t,ED.range[0],ED.range[1]);edrag={type:'seek'};return}
   if(h.type==='zoom'){pushHist();sel={type:'zoom',id:h.z.id};edrag={type:'zoom',z:h.z,edge:h.edge,t0:h.t,s:h.z.s,e:h.z.e};edInsp();return}
   if(h.type==='keep'){sel={type:'keep',i:h.i};if(h.edge!=null){pushHist();edrag={type:'keep',i:h.i,edge:h.edge}}else{v.currentTime=h.t;edrag={type:'seek'}}edInsp();return}
   if(h.type==='gap'){sel={type:'gap',a:h.a,b:h.b};v.currentTime=h.t;edInsp();}
@@ -825,9 +839,10 @@ etl.onmousedown=e=>{if(!ED)return;const h=edHit(e.offsetX,e.offsetY),v=$('#ev');
 etl.ondblclick=e=>{if(!ED)return;const h=edHit(e.offsetX,e.offsetY);if(h.type==='zoomlane')edAddZoom(h.t)};
 window.addEventListener('mousemove',e=>{if(!edrag||!ED)return;const b=etl.getBoundingClientRect(),t=clamp(ED.tl.t(e.clientX-b.left),ED.range[0],ED.range[1]);
   if(edrag.type==='seek'){$('#ev').currentTime=t}
-  else if(edrag.type==='zoom'){const z=edrag.z;
-    if(edrag.edge==='s')z.s=Math.min(t,z.e-0.4);else if(edrag.edge==='e')z.e=Math.max(t,z.s+0.4);
-    else{const d=t-edrag.t0,len=edrag.e-edrag.s;z.s=clamp(edrag.s+d,ED.range[0],ED.range[1]-len);z.e=z.s+len}}
+  else if(edrag.type==='zoom'){const z=edrag.z,sn=v=>e.altKey?v:snapT(v);
+    if(edrag.edge==='s')z.s=Math.min(sn(t),z.e-0.3);else if(edrag.edge==='e')z.e=Math.max(sn(t),z.s+0.3);
+    else{const d=t-edrag.t0,len=edrag.e-edrag.s;let ns=clamp(edrag.s+d,ED.range[0],ED.range[1]-len);
+      const a=sn(ns),b=sn(ns+len);if(a!==ns)ns=a;else if(b!==ns+len)ns=b-len;z.s=ns;z.e=ns+len}}
   else if(edrag.type==='keep'){const k=ED.keep[edrag.i],pv=ED.keep[edrag.i-1],nx=ED.keep[edrag.i+1];
     if(edrag.edge===0)k[0]=clamp(t,pv?pv[1]+0.05:ED.range[0],k[1]-0.2);else k[1]=clamp(t,k[0]+0.2,nx?nx[0]-0.05:ED.range[1])}
   edDraw()});
@@ -841,10 +856,22 @@ function edUndo(){if(!hist.length)return;redo.push(JSON.stringify({k:ED.keep,z:E
 function edRedo(){if(!redo.length)return;hist.push(JSON.stringify({k:ED.keep,z:ED.zooms}));const s=JSON.parse(redo.pop());ED.keep=s.k;ED.zooms=s.z;sel=null;edChanged(true)}
 function edChanged(){edInsp();edStatsLocal();edDraw();clearTimeout(saveT);saveT=setTimeout(edSave,500)}
 async function edSave(){if(!ED)return;const r=await api(`/api/project/${PID}/edit/save`,{keep:ED.keep,zooms:ED.zooms,zoom:ED.zoom,blur:ED.blur,out:ED.out});if(r.report){ED.report=r.report;edStats()}}
-function edAddZoom(t){if(!ED)return;if(!ED.cam){alert('Prima imposta la cam (⚙ Cam e opzioni)');return}t=t??$('#ev').currentTime;pushHist();
-  const id=Math.max(0,...ED.zooms.map(z=>z.id))+1;let s=t,e=Math.min(ED.range[1],t+2.5);
-  const nx=ED.zooms.filter(z=>z.s>t).sort((a,b)=>a.s-b.s)[0];if(nx&&e>nx.s)e=nx.s;if(e-s<0.4)return;
-  ED.zooms.push({id,s,e,lv:1});ED.zooms.sort((a,b)=>a.s-b.s);sel={type:'zoom',id};edChanged()}
+function snapPts(){const p=[ED.range[0],ED.range[1]];for(const k of ED.keep)p.push(k[0],k[1]);return p}
+function snapT(t){const tol=10*(ED.tl.b-ED.tl.a)/ED.tl.W;let best=t,bd=tol;for(const p of snapPts()){const d=Math.abs(p-t);if(d<bd){bd=d;best=p}}return best}
+function clipIndexAt(t){let i=ED.keep.findIndex(k=>t>=k[0]&&t<k[1]);if(i<0)i=ED.keep.findIndex(k=>k[0]>=t);return i}
+function edAddZoom(t,lv){if(!ED)return;if(!ED.cam){alert('Prima imposta la cam (⚙ Cam e opzioni)');return}
+  let i=(sel&&sel.type==='keep'&&t==null)?sel.i:clipIndexAt(t??$('#ev').currentTime);if(i<0)return;
+  const k=ED.keep[i],ex=ED.zooms.find(z=>z.e>k[0]+0.05&&z.s<k[1]-0.05);
+  if(ex){if(lv&&ex.lv!==lv){pushHist();ex.lv=lv}sel={type:'zoom',id:ex.id};edChanged();return}
+  pushHist();const id=Math.max(0,...ED.zooms.map(z=>z.id))+1;
+  ED.zooms.push({id,s:k[0],e:k[1],lv:lv||1,fx:'blur'});ED.zooms.sort((a,b)=>a.s-b.s);sel={type:'zoom',id};edChanged()}
+function selZoom(){return sel&&sel.type==='zoom'?ED.zooms.find(q=>q.id===sel.id):null}
+function edExtend(){const z=selZoom();if(!z)return;const nx=ED.keep.find(k=>k[1]>z.e+0.05);if(!nx)return;
+  const blk=ED.zooms.find(q=>q!==z&&q.s>=z.e-0.01&&q.s<nx[1]);pushHist();z.e=blk?blk.s:nx[1];edChanged()}
+function edShrink(){const z=selZoom();if(!z)return;const pv=[...ED.keep].reverse().find(k=>k[1]<z.e-0.05&&k[1]>z.s+0.2);if(!pv)return;pushHist();z.e=pv[1];edChanged()}
+function edExtendStart(){const z=selZoom();if(!z)return;const pv=[...ED.keep].reverse().find(k=>k[0]<z.s-0.05);if(!pv)return;
+  const blk=[...ED.zooms].reverse().find(q=>q!==z&&q.e<=z.s+0.01&&q.e>pv[0]);pushHist();z.s=blk?blk.e:pv[0];edChanged()}
+function edSetFx(fx){const z=selZoom();if(!z)return;pushHist();z.fx=fx;edChanged()}
 function edSplit(){const t=$('#ev').currentTime,i=ED.keep.findIndex(k=>t>k[0]+0.1&&t<k[1]-0.1);if(i<0)return;pushHist();const k=ED.keep[i];ED.keep.splice(i,1,[k[0],t],[t,k[1]]);sel={type:'keep',i:i+1};edChanged()}
 function edDelete(){if(!sel)return;pushHist();
   if(sel.type==='zoom')ED.zooms=ED.zooms.filter(z=>z.id!==sel.id);
@@ -859,12 +886,16 @@ function edGo(t){const v=$('#ev');v.currentTime=Math.max(ED.range[0],t-1.5);v.pl
 function edInsp(){const box=$('#eInsp');let h='<h4>Selezione</h4>';
   if(!sel){h+='<div class="hint">Clicca un pezzo verde (tenuto), una parte rossa (tagliata) o uno zoom nella timeline.</div>'}
   else if(sel.type==='zoom'){const z=ED.zooms.find(q=>q.id===sel.id);if(!z){sel=null;return edInsp()}
-    h+=`<b>${z.lv===2?'🔴 Cam a tutto schermo':'🟠 Zoom sulla cam'}</b><div class="hint">${tcs(z.s)} → ${tcs(z.e)} · ${(z.e-z.s).toFixed(1)} s</div>
+    const nClip=ED.keep.filter(k=>k[1]>z.s+0.05&&k[0]<z.e-0.05).length;
+    h+=`<b>${z.lv===2?'🔴 Cam a tutto schermo':'🟠 Zoom sulla cam'}</b><div class="hint">${tcs(z.s)} → ${tcs(z.e)} · ${(z.e-z.s).toFixed(1)} s · copre ${nClip} clip</div>
       <div class="row"><div class="seg"><button class="${z.lv===1?'on':''}" onclick="edSetLv(1)">Zoom</button><button class="${z.lv===2?'on':''}" onclick="edSetLv(2)">Cam piena</button></div></div>
+      <div class="row"><div class="seg"><button class="${z.fx!=='cut'?'on':''}" onclick="edSetFx('blur')">Entra con blur</button><button class="${z.fx==='cut'?'on':''}" onclick="edSetFx('cut')">Stacco netto</button></div></div>
+      <div class="row"><button onclick="edExtendStart()" title="[">⇤ Una clip prima</button><button onclick="edShrink()">Togli l'ultima clip</button><button class="pri" onclick="edExtend()" title="]">Allunga alla clip dopo ⇥</button></div>
       <div class="row"><button onclick="edGo(${z.s})">▶ Guardalo</button><button onclick="edDelete()">🗑 Elimina zoom</button></div>
-      <div class="hint" style="margin-top:6px">Trascinalo per spostarlo, tira i bordi per allungarlo.</div>`}
+      <div class="hint" style="margin-top:6px">I bordi si agganciano alle clip quando li trascini (tieni Alt per muoverli liberi). Tasti: <span class="kbd">]</span> allunga · <span class="kbd">[</span> una clip prima.</div>`}
   else if(sel.type==='keep'){const k=ED.keep[sel.i];if(!k){sel=null;return edInsp()}
     h+=`<b>🟩 Pezzo tenuto</b><div class="hint">${tcs(k[0])} → ${tcs(k[1])} · ${(k[1]-k[0]).toFixed(1)} s</div>
+      <div class="row"><button class="pri" onclick="edAddZoom(null,1)">🔍 Zoom su questa clip <span class="kbd">Z</span></button><button onclick="edAddZoom(null,2)">🔴 Cam piena <span class="kbd">X</span></button></div>
       <div class="row"><button onclick="edGo(${k[0]+1.5})">▶ Guardalo</button><button onclick="edDelete()">✂ Taglia questo pezzo</button></div>
       <div class="hint" style="margin-top:6px">Tira i bordi per allargarlo o stringerlo. "Spezza qui" lo divide sul cursore.</div>`}
   else if(sel.type==='gap'){h+=`<b>🟥 Parte tagliata</b><div class="hint">${tcs(sel.a)} → ${tcs(sel.b)} · ${(sel.b-sel.a).toFixed(1)} s</div>
@@ -880,7 +911,10 @@ window.addEventListener('keydown',e=>{if(VIEW!=='vEditor'||!ED||/INPUT|SELECT|TE
   if(e.code==='Space'){e.preventDefault();edToggle()}
   else if(e.key==='z'&&(e.ctrlKey||e.metaKey)){e.preventDefault();edUndo()}
   else if(e.key==='y'&&(e.ctrlKey||e.metaKey)){e.preventDefault();edRedo()}
-  else if(e.key==='z'||e.key==='Z'){edAddZoom()}
+  else if(e.key==='z'||e.key==='Z'){edAddZoom(null,1)}
+  else if(e.key==='x'||e.key==='X'){edAddZoom(null,2)}
+  else if(e.key===']'){edExtend()}
+  else if(e.key==='['){edExtendStart()}
   else if(e.key==='s'||e.key==='S'){edSplit()}
   else if(e.key==='Delete'||e.key==='Backspace'){edDelete()}
   else if(e.key==='ArrowLeft'){v.currentTime=Math.max(ED.range[0],v.currentTime-(e.shiftKey?5:1))}
@@ -888,6 +922,16 @@ window.addEventListener('keydown',e=>{if(VIEW!=='vEditor'||!ED||/INPUT|SELECT|TE
 
 api('/api/config').then(c=>window.CFG=c);
 loadRecent();
+/* ---------- aggiornamenti ---------- */
+async function checkUpdate(force){const u=await api('/api/update'+(force?'?force=1':''));
+  $('#verTxt').textContent=`Versione installata: ${u.current}`+(u.latest?` · ultima: ${u.latest}`:'')+(u.error&&force?' · non riesco a controllare ora':'');
+  if(u.available){$('#updTxt').textContent=`${u.current} → ${u.latest}`;$('#upd').classList.remove('hidden')}
+  else if(force&&!u.error)alert('Hai già l\'ultima versione ('+u.current+')');return u}
+async function doUpdate(){if(!confirm('Jarvis scarica l\'aggiornamento, si chiude e si riapre da solo. I progetti restano. Vado?'))return;
+  await api('/api/update',{});$('#updBtn').disabled=true;
+  const t=setInterval(async()=>{const u=await api('/api/update');const s=u.state;$('#updBar').style.width=(s.progress*100)+'%';$('#updTxt').textContent=s.msg;
+    if(s.error){clearInterval(t);$('#updBtn').disabled=false;alert(s.error)}},800)}
+checkUpdate(false);
 
 </script>
 </body>

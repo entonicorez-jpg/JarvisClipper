@@ -25,11 +25,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pywebview pyinstaller
 
+      - name: Write version
+        shell: pwsh
+        run: Set-Content -Path version.txt -Value "1.0.${{ github.run_number }}" -NoNewline
+
       - name: Build app (PyInstaller)
         run: >
           pyinstaller desktop.py --name JarvisClipper --windowed --noconfirm --onedir
           --icon assets/icon.ico
-          --add-data "static;static"
+          --add-data "static;static" --add-data "version.txt;."
           --hidden-import selftest
           --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime
           --collect-all av --collect-all tokenizers

@@ -9,10 +9,23 @@ import os, re, tempfile
 import numpy as np
 from . import media, analyze
 
-RITMO = {  # posizione soglia tra rumore e voce (0-1), silenzio minimo s, margine s
+RITMO = {  # ripiego sul volume: posizione soglia (0-1), silenzio minimo s, margine s
     "tranquillo": (0.25, 1.0, 0.25),
     "normale": (0.35, 0.6, 0.15),
     "veloce": (0.45, 0.4, 0.08),
+    "jumpcut": (0.5, 0.25, 0.05),
+}
+VAD = {  # rilevamento voce: silenzio minimo ms, margine ms, pezzo minimo s
+    "tranquillo": (700, 250, 0.5),
+    "normale": (380, 150, 0.35),
+    "veloce": (220, 90, 0.25),
+    "jumpcut": (110, 45, 0.18),
+}
+DENSITA = {  # dB sopra la tua voce normale per: zoom, cam piena; ogni quante clip uno zoom "a ritmo" (0 = mai)
+    "pochi": (10.0, 14.0, 0),
+    "normali": (7.0, 11.0, 3),
+    "tanti": (5.5, 9.5, 2),
+    "ogni_frase": (5.0, 9.0, 1),
 }
 ZOOM = {"leggero": 1.18, "normale": 1.32, "forte": 1.5}
 T_IN, T_OUT = 0.26, 0.18  # durata entrata/uscita dello zoom
@@ -45,6 +58,50 @@ def silences(path, thr, mind, start=0.0, length=None):
     if cur is not None:
         out.append((cur, 1e12))
     return out
+
+
+def speech_segments(path, start, length, ritmo, progress=lambda f: None, stop=lambda: False):
+    """Dove parli (Silero VAD, incluso in faster-whisper, gira offline). -> [(a, b)] in secondi locali."""
+    from faster_whisper.vad import get_speech_timestamps, VadOptions
+    min_sil, pad, _ = VAD.get(ritmo, VAD["normale"])
+    opts = VadOptions(threshold=0.45, min_silence_duration_ms=min_sil, speech_pad_ms=pad, min_speech_duration_ms=120)
+    chunk = 600.0
+    segs, t = [], 0.0
+    while t < length - 0.05:
+        if stop():
+            raise RuntimeError("Annullato")
+        d = min(chunk, length - t)
+        r = media.subprocess.run([media.ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-ss", f"{start + t:.3f}",
+                                  "-i", path, "-t", f"{d:.3f}", "-vn", "-ac", "1", "-ar", "16000", "-f", "f32le", "-"],
+                                 capture_output=True, creationflags=media.CREATE_NO_WINDOW)
+        audio = np.frombuffer(r.stdout, np.float32)
+        if len(audio) > 1600:
+            for sgm in get_speech_timestamps(audio, opts):
+                a, b = t + sgm["start"] / 16000, t + sgm["end"] / 16000
+                if segs and a - segs[-1][1] < min_sil / 1000:
+                    segs[-1] = (segs[-1][0], b)
+                else:
+                    segs.append((a, b))
+        t += d
+        progress(min(1.0, t / length))
+    return segs
+
+
+def merge_segments(segs, gap=0.0, min_len=0.0):
+    out = []
+    for a, b in sorted(segs):
+        if out and a <= out[-1][1] + gap:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return [(a, b) for a, b in out if b - a >= min_len]
+
+
+def loud_regions(half_db, k=2.5):
+    """Tratti molto forti (urla, risate) da non tagliare mai, anche se il VAD non li vede come voce."""
+    z, mad = analyze.robust_z(half_db)
+    idx = np.where(z > k)[0]
+    return merge_segments([(i * 0.5 - 0.2, i * 0.5 + 0.7) for i in idx], 0.3)
 
 
 def keep_segments(sil, dur, pad, min_keep=0.25):
@@ -96,32 +153,84 @@ def zoom_intervals(reacts, hold=2.4, max_len=6.0):
     return iv
 
 
+def voice_z(half, keep, rs):
+    """dB sopra il tuo parlato normale (livello della voce misurato nei ~10 minuti attorno, solo dove parli)."""
+    mask = np.zeros(len(half), bool)
+    for a, b in keep:
+        mask[max(0, int((a - rs) * 2)):max(0, int((b - rs) * 2))] = True
+    v = half[mask] if mask.sum() > 20 else half
+    med = float(np.median(v))
+    base = analyze.rolling_median(np.where(mask, half, med).astype(np.float32), 1201)
+    return analyze.smooth(half - base, 2)
+
+
+def auto_zooms(keep, half, rs, density="normali", full_cam=True):
+    """Zoom agganciati alle clip (pezzi tenuti).
+    - reazione forte -> cam piena con motion blur; reazione -> zoom con blur
+    - con densità alta: zoom "a ritmo" (stacco netto) su una clip ogni N mentre parli, stile YouTube."""
+    t1, t2, every = DENSITA.get(density, DENSITA["normali"])
+    zz = voice_z(half, keep, rs)
+    zooms, since = [], 0
+    for a, b in keep:
+        i0, i1 = int((a - rs) * 2), max(int((a - rs) * 2) + 1, int((b - rs) * 2))
+        seg = zz[max(0, i0):min(len(zz), i1)]
+        peak = float(seg.max()) if len(seg) else -9
+        d = b - a
+        lv, fx = 0, "blur"
+        if peak >= t2:
+            lv = 2 if full_cam else 1
+        elif peak >= t1:
+            lv = 1
+        elif every and d >= 1.0 and since + 1 >= every:
+            lv, fx = 1, "cut"
+        if lv:
+            prev = zooms[-1] if zooms else None
+            if prev and abs(prev["e"] - a) < 0.05 and prev["lv"] == lv and prev["fx"] == fx and fx == "blur":
+                prev["e"] = b  # reazione che continua nella clip dopo: stesso zoom
+            else:
+                zooms.append({"s": a, "e": b, "lv": lv, "fx": fx})
+            since = 0
+        else:
+            since += 1
+    for i, q in enumerate(zooms):
+        q["id"] = i + 1; q["s"] = round(q["s"], 3); q["e"] = round(q["e"], 3)
+    return zooms
+
+
 def analyze_edit(path, info, cam, opts, half_full=None, progress=lambda f, m: None, log=print, stop=lambda: False):
     rs, re_ = opts.get("range") or (0.0, info["dur"])
     rs, re_ = max(0.0, float(rs)), min(info["dur"], float(re_))
     length = re_ - rs
-    pos, mind, pad = RITMO.get(opts.get("ritmo", "normale"), RITMO["normale"])
+    ritmo = opts.get("ritmo", "veloce")
     progress(0.02, "Ascolto l'audio…")
     if half_full is not None and len(half_full) >= int(re_ * 2) - 2:
         half = half_full[int(rs * 2):int(re_ * 2)]
     else:
-        half = analyze.audio_energy(path, length, lambda f: progress(0.02 + 0.5 * f, "Ascolto l'audio…"), stop, rs)
-    thr = auto_threshold(half, pos)
-    log(f"Soglia silenzio: {thr:.1f} dB")
-    progress(0.55, "Cerco i silenzi…")
-    keep = [[round(a + rs, 3), round(b + rs, 3)] for a, b in keep_segments(silences(path, thr, mind, rs, length), length, pad)]
+        half = analyze.audio_energy(path, length, lambda f: progress(0.02 + 0.3 * f, "Ascolto l'audio…"), stop, rs)
+    keep = None
+    try:
+        progress(0.35, "Capisco dove stai parlando…")
+        sp = speech_segments(path, rs, length, ritmo, lambda f: progress(0.35 + 0.5 * f, "Capisco dove stai parlando…"), stop)
+        _, _, min_piece = VAD.get(ritmo, VAD["normale"])
+        segs = merge_segments(sp + loud_regions(half), 0.02, min_piece)
+        keep = [[round(max(0.0, a) + rs, 3), round(min(length, b) + rs, 3)] for a, b in segs]
+        log(f"Voce trovata in {len(sp)} tratti (rilevamento voce)")
+    except Exception as e:
+        if "Annullato" in str(e):
+            raise
+        log(f"Rilevamento voce non disponibile ({str(e)[:60]}), uso il volume")
     if not keep:
-        raise RuntimeError("Non ho trovato parlato: prova il ritmo 'tranquillo'")
-    progress(0.85, "Cerco le tue reazioni…")
-    reacts = reactions(half, float(opts.get("sens", 1.0))) if cam else []
-    if not opts.get("full_cam", True):
-        reacts = [(s, e, 1) for s, e, _ in reacts]
-    zooms = [{"id": i + 1, "s": round(s + rs, 3), "e": round(e + rs, 3), "lv": lv}
-             for i, (s, e, lv) in enumerate(zoom_intervals(reacts))]
+        pos, mind, pad = RITMO.get(ritmo, RITMO["normale"])
+        thr = auto_threshold(half, pos)
+        keep = [[round(a + rs, 3), round(b + rs, 3)] for a, b in keep_segments(silences(path, thr, mind, rs, length), length, pad)]
+    if not keep:
+        raise RuntimeError("Non ho trovato parlato in questa parte")
+    progress(0.9, "Decido dove mettere gli zoom…")
+    zooms = auto_zooms(keep, half, rs, opts.get("densita", "normali"), opts.get("full_cam", True)) if cam else []
     ed = {"keep": keep, "zooms": zooms, "range": [rs, re_], "zoom": ZOOM.get(opts.get("zoom", "normale"), 1.32),
           "blur": bool(opts.get("blur", True)), "out": opts.get("out", "blur"), "opts": opts}
     ed["report"] = report(ed)
-    log(f"Montaggio: {media.tc(length)} -> {media.tc(ed['report']['durata_finale'])}, {len(keep)} tagli, {len(zooms)} zoom")
+    log(f"Montaggio: {media.tc(length)} -> {media.tc(ed['report']['durata_finale'])}, {len(keep)} pezzi, {len(zooms)} zoom")
     progress(1.0, "Pronto")
     return ed
 
@@ -160,14 +269,17 @@ def build_pieces(keep, zooms):
 
 
 def subpieces(pieces, ed):
-    """Spezza ogni pezzo zoomato in entrata animata / tenuta / uscita -> [(a, b, lv, kind)]."""
+    """Spezza ogni pezzo zoomato in entrata animata / tenuta / uscita -> [(a, b, lv, kind)].
+    Gli zoom con fx="cut" entrano ed escono con uno stacco netto (zoom a ritmo)."""
+    zs = sorted(ed["zooms"], key=lambda z: z["s"])
     res = []
     for a, b, lv, zi, tin, tout in pieces:
         if lv == 0:
             res.append((a, b, 0, "static")); continue
         d = b - a
-        ti = min(T_IN, d * 0.45) if (tin and ed.get("blur", True)) else 0
-        to = min(T_OUT, d * 0.3) if (tout and ed.get("out", "blur") == "blur" and ed.get("blur", True)) else 0
+        anim = ed.get("blur", True) and zs[zi].get("fx", "blur") == "blur"
+        ti = min(T_IN, d * 0.45) if (tin and anim) else 0
+        to = min(T_OUT, d * 0.3) if (tout and ed.get("out", "blur") == "blur" and anim) else 0
         ti = ti if ti > 0.05 else 0
         to = to if to > 0.05 else 0
         if ti:

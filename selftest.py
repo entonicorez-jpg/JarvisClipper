@@ -47,6 +47,9 @@ def run(out_path):
     step("montaggio: zoom con motion blur", lambda: fx.update(autoedit.render_fx(vid, info, cam, ed, os.path.join(d, "fx"))) or len(fx))
     step("montaggio: xml", lambda: premiere.build_autoedit_xml(ed, vid, info, cam, os.path.join(d, "ae.xml"), fx=fx))
     step("montaggio: mp4", lambda: media.probe(autoedit.render(vid, info, cam, ed, os.path.join(d, "ae.mp4")))["dur"])
+    step("rilevamento voce (VAD)", lambda: len(autoedit.speech_segments(vid, 0, 20, "jumpcut")))
+    from core import updater
+    step("versione inclusa", lambda: updater.current_version() if updater.current_version() != "dev" else (_ for _ in ()).throw(RuntimeError("version.txt mancante")))
     step("autocam (opencv)", lambda: layout.auto_cam([], info))
     for mod in ("yt_dlp", "curl_cffi", "cv2", "webview", "faster_whisper", "ctranslate2", "flask"):
         step("import " + mod, lambda m=mod: __import__(m) and None)

@@ -7,7 +7,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory, abort
 FROZEN = getattr(sys, "frozen", False)
 BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))  # file dell'app (sola lettura)
 sys.path.insert(0, BASE)
-from core import media, analyze, render, premiere, gpu, autoedit, layout as lay  # noqa: E402
+from core import media, analyze, render, premiere, gpu, autoedit, updater, layout as lay  # noqa: E402
 
 # dati scrivibili: accanto allo script, oppure in %LOCALAPPDATA%\JarvisClipper se è l'app installata
 DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "JarvisClipper") if FROZEN else BASE
@@ -442,7 +442,8 @@ def api_edit_save(pid):
         p = load(pid); ed = p.get("edit") or {}
         rs, re_ = ed.get("range") or p.get("range")
         keep = sorted([[max(rs, float(a)), min(re_, float(b))] for a, b in d.get("keep", []) if float(b) - float(a) > 0.05])
-        zooms = [{"id": int(z.get("id", i + 1)), "s": float(z["s"]), "e": float(z["e"]), "lv": int(z.get("lv", 1))}
+        zooms = [{"id": int(z.get("id", i + 1)), "s": float(z["s"]), "e": float(z["e"]), "lv": int(z.get("lv", 1)),
+                  "fx": "cut" if z.get("fx") == "cut" else "blur"}
                  for i, z in enumerate(d.get("zooms", [])) if float(z["e"]) - float(z["s"]) > 0.2]
         ed.update(keep=keep, zooms=zooms)
         for k in ("zoom", "blur", "out"):
@@ -491,6 +492,16 @@ def api_gpu():
         gpu.STATE["running"] = True
         threading.Thread(target=gpu.install, daemon=True).start()
     return jsonify(dict(gpu.STATE, installed=gpu.installed(), nvidia=gpu.has_nvidia()))
+
+
+@app.route("/api/update", methods=["GET", "POST"])
+def api_update():
+    if request.method == "POST":
+        if not updater.STATE["running"]:
+            threading.Thread(target=updater.install, args=(lambda: os._exit(0),), daemon=True).start()
+        return jsonify({"ok": True})
+    info = updater.check(force=request.args.get("force") == "1")
+    return jsonify(dict(info, state=updater.STATE))
 
 
 @app.route("/api/projects")

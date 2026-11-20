@@ -38,3 +38,4 @@ Name: "{autodesktop}\Jarvis Clipper"; Filename: "{app}\JarvisClipper.exe"; Tasks
 
 [Run]
 Filename: "{app}\JarvisClipper.exe"; Description: "Apri Jarvis Clipper"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\JarvisClipper.exe"; Flags: nowait; Check: WizardSilent
