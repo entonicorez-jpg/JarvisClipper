@@ -377,9 +377,11 @@ def job_edit_export(pid, premiere_xml, mp4):
                                 lambda f, m: set_job(pid, progress=f / steps, msg=m), lambda: stopped(pid))
         bip = None
         if any(c.get("on", True) for c in ed.get("censor") or []):
-            bip = os.path.join(fxdir, "bip.wav")
-            media.run(["-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=f=1000:sample_rate=48000",
-                       "-t", "2", "-af", "volume=2.4", "-ac", "1", bip])
+            bip = os.path.join(fxdir, "censura.wav")
+            sfx = autoedit.censor_sfx()
+            src = ["-i", sfx] if sfx else ["-f", "lavfi", "-i", "sine=f=1000:sample_rate=48000"]
+            media.run(["-y", "-hide_banner", "-loglevel", "error"] + src + ["-t", "3", "-af",
+                       f"volume={autoedit.SFX_VOL if sfx else 2.4}", "-ar", "48000", "-ac", "2", bip])
         xml = os.path.join(out, f"{base}_MONTATO_{stamp}.xml")
         premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, xml, name=f"{base} - Montaggio Jarvis", fx=fx, bip=bip)
         res["xml"] = xml; k = 1
@@ -651,6 +653,14 @@ def api_open(pid):
     except Exception as e:
         return jsonify({"error": str(e)})
     return jsonify({"ok": True})
+
+
+@app.route("/sfx/censor")
+def sfx_censor():
+    p = autoedit.censor_sfx()
+    if not p:
+        abort(404)
+    return send_file(p, conditional=True)
 
 
 @app.route("/p/<pid>/<path:fname>")

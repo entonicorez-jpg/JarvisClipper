@@ -206,14 +206,14 @@ def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=
                          f"<trackindex>{ch}</trackindex></sourcetrack></clipitem>")
             x.append("</track>")
     if beeps and bip:
-        bfr = F(2.0)
+        bfr = F(3.0)
         x.append("<track>")
         for k, (st, ln) in enumerate(beeps):
             ln = max(1, min(ln, bfr))
-            fe = (f'<file id="bip"><name>bip.wav</name><pathurl>{escape(path_url(bip))}</pathurl>{rate}<duration>{bfr}</duration>'
+            fe = (f'<file id="bip"><name>censura.wav</name><pathurl>{escape(path_url(bip))}</pathurl>{rate}<duration>{bfr}</duration>'
                   f"<media><audio><samplecharacteristics><depth>16</depth><samplerate>48000</samplerate></samplecharacteristics>"
-                  f"<channelcount>1</channelcount></audio></media></file>") if k == 0 else '<file id="bip"/>'
-            x.append(f'<clipitem id="bp{k}"><name>BIP (parolaccia)</name><enabled>TRUE</enabled><duration>{bfr}</duration>{rate}'
+                  f"<channelcount>2</channelcount></audio></media></file>") if k == 0 else '<file id="bip"/>'
+            x.append(f'<clipitem id="bp{k}"><name>CENSURA</name><enabled>TRUE</enabled><duration>{bfr}</duration>{rate}'
                      f"<start>{st}</start><end>{st + ln}</end><in>0</in><out>{ln}</out>{fe}"
                      "<sourcetrack><mediatype>audio</mediatype><trackindex>1</trackindex></sourcetrack></clipitem>")
         x.append("</track>")

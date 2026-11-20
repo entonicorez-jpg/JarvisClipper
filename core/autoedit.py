@@ -342,8 +342,19 @@ def view(info, cam, level, zoom):
 
 
 # ------------------------------------------------------------------ render
+def censor_sfx():
+    """Suono di censura scelto dall'utente (assets/censor.wav), se c'è."""
+    import sys
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p = os.path.join(base, "assets", "censor.wav")
+    return p if os.path.exists(p) else None
+
+
+SFX_VOL = 0.4   # il suono originale è fortissimo: lo abbassiamo un po' rispetto alla voce
+
+
 def bleep_args(ranges, a, b, preview):
-    """Argomenti ffmpeg per l'audio con i bip sulle parole censurate nel tratto [a, b]."""
+    """Argomenti ffmpeg per l'audio con il suono di censura sulle parole nel tratto [a, b]."""
     rel = [(max(0.0, c["s"] - a), min(b - a, c["e"] - a)) for c in ranges
            if c.get("on", True) and c["e"] > a and c["s"] < b]
     rel = [(x, y) for x, y in rel if y - x > 0.02]
@@ -351,11 +362,22 @@ def bleep_args(ranges, a, b, preview):
     if not rel:
         return [], ["-af", base], ["-map", "0:a?"]
     en = "+".join(f"between(t\\,{x:.3f}\\,{y:.3f})" for x, y in rel)
-    fc = (f"[0:a]{base},volume=0:enable='{en}'[m];"
-          f"[1:a]aformat=channel_layouts=stereo,volume=2.4,volume=0:enable='not({en})'[bp];"
-          f"[m][bp]amix=inputs=2:normalize=0:duration=first[aout]")
-    return (["-f", "lavfi", "-t", f"{b - a:.3f}", "-i", "sine=f=1000:sample_rate=48000"],
-            ["-filter_complex", fc], ["-map", "[aout]"])
+    sfx = censor_sfx()
+    if not sfx:  # ripiego: bip a 1000 Hz
+        fc = (f"[0:a]{base},volume=0:enable='{en}'[m];"
+              f"[1:a]aformat=channel_layouts=stereo,volume=2.4,volume=0:enable='not({en})'[bp];"
+              f"[m][bp]amix=inputs=2:normalize=0:duration=first[aout]")
+        return (["-f", "lavfi", "-t", f"{b - a:.3f}", "-i", "sine=f=1000:sample_rate=48000"],
+                ["-filter_complex", fc], ["-map", "[aout]"])
+    n = len(rel)
+    parts = [f"[0:a]{base},volume=0:enable='{en}'[m]",
+             f"[1:a]aresample=48000,aformat=channel_layouts=stereo,volume={SFX_VOL}," + (f"asplit={n}" + "".join(f"[s{i}]" for i in range(n)) if n > 1 else "anull[s0]")]
+    for i, (x, y) in enumerate(rel):
+        ln = min(3.0, y - x)
+        ms = int(round(x * 1000))
+        parts.append(f"[s{i}]atrim=0:{ln:.3f},asetpts=PTS-STARTPTS,afade=t=out:st={max(0, ln - 0.03):.3f}:d=0.03,adelay={ms}|{ms}[d{i}]")
+    parts.append("[m]" + "".join(f"[d{i}]" for i in range(n)) + f"amix=inputs={n + 1}:normalize=0:duration=first[aout]")
+    return ["-i", sfx], ["-filter_complex", ";".join(parts)], ["-map", "[aout]"]
 
 
 def _encode(path, info, cam, ed, a, b, lv, kind, out, W, H, preview, with_audio=True):

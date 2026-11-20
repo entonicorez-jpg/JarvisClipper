@@ -789,9 +789,10 @@ function edTick(){
   if(!v.paused&&!edrag)ED.tl.follow(t);
   edDraw();
 }
-let actx=null,osc=null;
-function edBeep(on){if(on&&!osc){try{actx=actx||new AudioContext();osc=actx.createOscillator();const g=actx.createGain();g.gain.value=0.12;osc.frequency.value=1000;osc.connect(g).connect(actx.destination);osc.start()}catch(e){}}
-  else if(!on&&osc){try{osc.stop()}catch(e){}osc=null}}
+let sfxA=null,sfxOn=false;
+function edBeep(on){if(on===sfxOn)return;sfxOn=on;
+  if(!sfxA){sfxA=new Audio('/sfx/censor');sfxA.loop=true;sfxA.volume=0.4}
+  try{if(on){sfxA.currentTime=0;sfxA.play()}else sfxA.pause()}catch(e){}}
 function edToggle(){const v=$('#ev');if(v.paused){if(v.currentTime<ED.range[0]||v.currentTime>=ED.range[1]-0.05)v.currentTime=ED.keep[0][0];v.play()}else v.pause()}
 document.querySelectorAll('#ePrevSeg button').forEach(b=>b.onclick=()=>{montato=b.dataset.m==='1';document.querySelectorAll('#ePrevSeg button').forEach(x=>x.classList.toggle('on',x===b))});
 /* --- disegno timeline --- */
