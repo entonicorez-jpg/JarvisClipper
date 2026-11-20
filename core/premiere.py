@@ -110,7 +110,7 @@ def build_xml(clips, src, info, layout, rendered, out_xml):
     return out_xml
 
 
-def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=None):
+def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=None, bip=None):
     """Sequenza orizzontale.
     V1 = pezzi tagliati; quelli zoomati hanno l'effetto Movimento (scala + posizione), modificabile.
     V2 = entrate/uscite degli zoom già renderizzate con il motion blur (si possono spostare o cancellare).
@@ -181,15 +181,42 @@ def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=
                      f"<in>0</in><out>{d}</out>" + file_el(f"fx{k}", fp, os.path.basename(fp), d, audio=False) + "</clipitem>")
         x.append("</track>")
     x.append("</video><audio>")
+    cens = [c for c in (ed.get("censor") or []) if c.get("on", True)]
+    beeps = []
     if info.get("has_audio", True):
+        # pezzi audio con un buco sulle parolacce (il bip va su A3)
+        apieces = []
+        for st, i0, i1, lv, kind, a, b in items:
+            holes = sorted((max(F(c["s"]), i0), min(F(c["e"]), i1)) for c in cens if F(c["e"]) > i0 and F(c["s"]) < i1)
+            cur = i0
+            for h0, h1 in holes:
+                if h0 > cur:
+                    apieces.append((st + cur - i0, cur, h0))
+                if h1 > h0:
+                    beeps.append((st + h0 - i0, h1 - h0))
+                cur = max(cur, h1)
+            if i1 > cur:
+                apieces.append((st + cur - i0, cur, i1))
         for ch in range(1, min(info["ch"], 2) + 1):
             x.append("<track>")
-            for k, (st, i0, i1, lv, kind, a, b) in enumerate(items):
+            for k, (st, i0, i1) in enumerate(apieces):
                 x.append(f'<clipitem id="a{ch}_{k}"><name>{escape(src_name)}</name><enabled>TRUE</enabled>'
                          f"<duration>{src_frames}</duration>{rate}<start>{st}</start><end>{st + i1 - i0}</end>"
                          f'<in>{i0}</in><out>{i1}</out><file id="src"/><sourcetrack><mediatype>audio</mediatype>'
                          f"<trackindex>{ch}</trackindex></sourcetrack></clipitem>")
             x.append("</track>")
+    if beeps and bip:
+        bfr = F(2.0)
+        x.append("<track>")
+        for k, (st, ln) in enumerate(beeps):
+            ln = max(1, min(ln, bfr))
+            fe = (f'<file id="bip"><name>bip.wav</name><pathurl>{escape(path_url(bip))}</pathurl>{rate}<duration>{bfr}</duration>'
+                  f"<media><audio><samplecharacteristics><depth>16</depth><samplerate>48000</samplerate></samplecharacteristics>"
+                  f"<channelcount>1</channelcount></audio></media></file>") if k == 0 else '<file id="bip"/>'
+            x.append(f'<clipitem id="bp{k}"><name>BIP (parolaccia)</name><enabled>TRUE</enabled><duration>{bfr}</duration>{rate}'
+                     f"<start>{st}</start><end>{st + ln}</end><in>0</in><out>{ln}</out>{fe}"
+                     "<sourcetrack><mediatype>audio</mediatype><trackindex>1</trackindex></sourcetrack></clipitem>")
+        x.append("</track>")
     x.append("</audio></media></sequence></xmeml>")
     with open(out_xml, "w", encoding="utf-8") as f:
         f.write("".join(x))

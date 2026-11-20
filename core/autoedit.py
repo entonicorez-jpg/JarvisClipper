@@ -225,14 +225,50 @@ def analyze_edit(path, info, cam, opts, half_full=None, progress=lambda f, m: No
         keep = [[round(a + rs, 3), round(b + rs, 3)] for a, b in keep_segments(silences(path, thr, mind, rs, length), length, pad)]
     if not keep:
         raise RuntimeError("Non ho trovato parlato in questa parte")
-    progress(0.9, "Decido dove mettere gli zoom…")
+    spam, censor = [], []
+    segs = None
+    if opts.get("censor") or opts.get("nospam"):
+        try:
+            segs = transcribe_range(path, rs, length, opts, lambda f, m: progress(0.86 + 0.08 * f, m), log, stop)
+        except Exception as e:
+            if "Annullato" in str(e):
+                raise
+            log(f"Non riesco a capire il parlato ({str(e)[:80]}): niente bip né taglio spam questa volta")
+    if segs is not None:
+        from . import words as W
+        if opts.get("nospam"):
+            spam = W.find_spam(segs)
+            _, _, min_piece = VAD.get(ritmo, VAD["normale"])
+            keep = W.subtract(keep, spam, min_piece)
+            log(f"Spam TikTok tagliato: {len(spam)} frasi")
+        if opts.get("censor"):
+            censor = W.censor_ranges([w for sg in segs for w in sg["words"]])
+            log(f"Parolacce da censurare: {len(censor)}")
+    progress(0.95, "Decido dove mettere gli zoom…")
     zooms = auto_zooms(keep, half, rs, opts.get("densita", "normali"), opts.get("full_cam", True)) if cam else []
     ed = {"keep": keep, "zooms": zooms, "range": [rs, re_], "zoom": ZOOM.get(opts.get("zoom", "normale"), 1.32),
-          "blur": bool(opts.get("blur", True)), "out": opts.get("out", "blur"), "opts": opts}
+          "blur": bool(opts.get("blur", True)), "out": opts.get("out", "blur"), "opts": opts,
+          "spam": spam, "censor": censor}
     ed["report"] = report(ed)
     log(f"Montaggio: {media.tc(length)} -> {media.tc(ed['report']['durata_finale'])}, {len(keep)} pezzi, {len(zooms)} zoom")
     progress(1.0, "Pronto")
     return ed
+
+
+def transcribe_range(path, rs, length, opts, progress, log, stop):
+    """Trascrive tutta la parte scelta a blocchi di 5 minuti (tempi assoluti)."""
+    tr = analyze.Transcriber(opts.get("model", "small"), opts.get("lang", "it"), log)
+    progress(0.0, "Carico Whisper per capire cosa dici…")
+    tr.load()
+    segs, t, step = [], 0.0, 300.0
+    while t < length - 0.1:
+        if stop():
+            raise RuntimeError("Annullato")
+        d = min(step, length - t)
+        progress(t / length, f"Ascolto cosa dici… {media.tc(t)} / {media.tc(length)}")
+        segs += tr.transcribe(path, rs + t, d, 1)
+        t += d
+    return segs
 
 
 def report(ed):
@@ -240,7 +276,8 @@ def report(ed):
     tot = sum(b - a for a, b in ed["keep"])
     return {"durata_originale": round(re_ - rs, 1), "durata_finale": round(tot, 1), "tagliato": round(re_ - rs - tot, 1),
             "tagli": len(ed["keep"]), "zoom": sum(1 for z in ed["zooms"] if z["lv"] == 1),
-            "cam_piena": sum(1 for z in ed["zooms"] if z["lv"] == 2)}
+            "cam_piena": sum(1 for z in ed["zooms"] if z["lv"] == 2),
+            "spam": len(ed.get("spam") or []), "bip": sum(1 for c in ed.get("censor") or [] if c.get("on", True))}
 
 
 # ------------------------------------------------------------------ pezzi
@@ -305,6 +342,22 @@ def view(info, cam, level, zoom):
 
 
 # ------------------------------------------------------------------ render
+def bleep_args(ranges, a, b, preview):
+    """Argomenti ffmpeg per l'audio con i bip sulle parole censurate nel tratto [a, b]."""
+    rel = [(max(0.0, c["s"] - a), min(b - a, c["e"] - a)) for c in ranges
+           if c.get("on", True) and c["e"] > a and c["s"] < b]
+    rel = [(x, y) for x, y in rel if y - x > 0.02]
+    base = "aresample=48000,aformat=channel_layouts=stereo"
+    if not rel:
+        return [], ["-af", base], ["-map", "0:a?"]
+    en = "+".join(f"between(t\\,{x:.3f}\\,{y:.3f})" for x, y in rel)
+    fc = (f"[0:a]{base},volume=0:enable='{en}'[m];"
+          f"[1:a]aformat=channel_layouts=stereo,volume=2.4,volume=0:enable='not({en})'[bp];"
+          f"[m][bp]amix=inputs=2:normalize=0:duration=first[aout]")
+    return (["-f", "lavfi", "-t", f"{b - a:.3f}", "-i", "sine=f=1000:sample_rate=48000"],
+            ["-filter_complex", fc], ["-map", "[aout]"])
+
+
 def _encode(path, info, cam, ed, a, b, lv, kind, out, W, H, preview, with_audio=True):
     fps = info["fps"]
     x0, y0, w, h, S = view(info, cam, lv, ed["zoom"])
@@ -325,9 +378,10 @@ def _encode(path, info, cam, ed, a, b, lv, kind, out, W, H, preview, with_audio=
         y = f"{y0:.3f}*(1-1/zoom)/{k:.6f}"
         vf = (f"fps={fk:.4f},zoompan=z='{z}':x='{x}':y='{y}':d=1:s={W}x{H}:fps={fk:.4f},"
               f"tmix=frames={K},select='not(mod(n\\,{K}))',setpts=N/({fps:.5f}*TB),setsar=1,format=yuv420p")
-    args = ["-y", "-hide_banner", "-loglevel", "error", "-ss", f"{a:.3f}", "-i", path, "-t", f"{b - a:.3f}", "-vf", vf]
-    args += (["-af", "aresample=48000,aformat=channel_layouts=stereo", "-c:a", "aac", "-b:a", "96k" if preview else "192k"]
-             if with_audio else ["-an"])
+    extra_in, afilt, amap = bleep_args(ed.get("censor") or [], a, b, preview) if with_audio else ([], [], [])
+    args = ["-y", "-hide_banner", "-loglevel", "error", "-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", path] + extra_in
+    args += ["-vf", vf, "-map", "0:v"]
+    args += (afilt + amap + ["-c:a", "aac", "-b:a", "96k" if preview else "192k"]) if with_audio else ["-an"]
     args += ["-r", f"{fps:.5f}", "-c:v", "libx264", "-preset", "ultrafast" if preview else "veryfast",
              "-crf", "26" if preview else "18", "-f", "mpegts" if out.endswith(".ts") else "mp4", out]
     r = media.run(args)

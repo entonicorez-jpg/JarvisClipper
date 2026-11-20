@@ -35,11 +35,16 @@ def filter_graph(info, layout, W=OUT_W, H=OUT_H):
     return f"[0:v]split=2[a][b];[a]{cf}[c];[b]{gf}[g];[c][g]vstack=inputs=2,format=yuv420p[v]"
 
 
-def render(path, info, layout, start, end, out, preview=False, burn_title=None):
+def render(path, info, layout, start, end, out, preview=False, censor=None):
     W, H = (540, 960) if preview else (OUT_W, OUT_H)
     fg = filter_graph(info, layout, W, H)
-    args = ["-y", "-hide_banner", "-loglevel", "error", "-ss", f"{start:.3f}", "-i", path,
-            "-t", f"{end - start:.3f}", "-filter_complex", fg, "-map", "[v]", "-map", "0:a?"]
+    from .autoedit import bleep_args
+    extra_in, afilt, amap = bleep_args(censor or [], start, end, preview)
+    if afilt and afilt[0] == "-filter_complex":
+        fg = fg + ";" + afilt[1]
+        afilt = []
+    args = ["-y", "-hide_banner", "-loglevel", "error", "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", path] + extra_in
+    args += ["-filter_complex", fg, "-map", "[v]"] + amap + afilt
     if preview:
         args += ["-r", "30", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-c:a", "aac", "-b:a", "96k"]
     else:

@@ -138,7 +138,7 @@ def build_overview(pid, src, info):
         set_job(pid, progress=0.95 * (0.5 * prog["a"] + 0.5 * prog["t"]), msg="Preparo la panoramica del VOD (volume e miniature)…")
 
     def thumbs():
-        n = int(min(200, max(40, dur / 30)))
+        n = int(min(400, max(40, dur / 15)))
         media.run(["-y", "-hide_banner", "-loglevel", "error", "-skip_frame", "nokey", "-i", src, "-an",
                    "-vf", f"fps={n / dur:.6f},scale=160:90,tile={n}x1", "-frames:v", "1", "-q:v", "5",
                    os.path.join(d, "strip.jpg")])
@@ -273,6 +273,13 @@ def job_analyze(pid, opts):
     render_previews(pid, 0.9)
 
 
+def clip_censor(p, c):
+    if not p.get("clip_censor"):
+        return None
+    from core import words as W
+    return W.censor_ranges(c.get("words") or [])
+
+
 def render_previews(pid, base=0.0, only=None):
     p = load(pid)
     todo = [c for c in p["clips"] if (only is None or c["id"] in only)]
@@ -284,7 +291,7 @@ def render_previews(pid, base=0.0, only=None):
         ver = int(time.time() * 1000) % 10 ** 8
         name = f"prev_{c['id']}_{ver}.mp4"
         render.render(p["src_path"], p["info"], p["layout"], c["start"], c["end"],
-                      os.path.join(pdir(pid), name), preview=True)
+                      os.path.join(pdir(pid), name), preview=True, censor=clip_censor(p, c))
         with LOCK:
             q = load(pid)
             for qc in q["clips"]:
@@ -314,7 +321,7 @@ def job_export(pid, ids, do_render):
             set_job(pid, progress=k / len(sel), msg=f"Renderizzo la clip {k + 1}/{len(sel)} in 1080x1920…")
             safe = re.sub(r'[\\/:*?"<>|]+', "", c.get("title", ""))[:40].strip()
             fp = os.path.join(out, f"Clip_{c['id']:02d}_{c['score']}_{safe}.mp4".replace(" ", "_"))
-            render.render(p["src_path"], p["info"], p["layout"], c["start"], c["end"], fp)
+            render.render(p["src_path"], p["info"], p["layout"], c["start"], c["end"], fp, censor=clip_censor(p, c))
             rendered[c["id"]] = fp
     stamp = time.strftime("%Y%m%d_%H%M")
     xml = os.path.join(out, f"{p.get('name', 'clips')[:50]}_Premiere_{stamp}.xml")
@@ -368,8 +375,13 @@ def job_edit_export(pid, premiere_xml, mp4):
         fxdir = os.path.join(out, f"{base}_zoom_blur_{stamp}")
         fx = autoedit.render_fx(p["src_path"], p["info"], cam, ed, fxdir,
                                 lambda f, m: set_job(pid, progress=f / steps, msg=m), lambda: stopped(pid))
+        bip = None
+        if any(c.get("on", True) for c in ed.get("censor") or []):
+            bip = os.path.join(fxdir, "bip.wav")
+            media.run(["-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=f=1000:sample_rate=48000",
+                       "-t", "2", "-af", "volume=2.4", "-ac", "1", bip])
         xml = os.path.join(out, f"{base}_MONTATO_{stamp}.xml")
-        premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, xml, name=f"{base} - Montaggio Jarvis", fx=fx)
+        premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, xml, name=f"{base} - Montaggio Jarvis", fx=fx, bip=bip)
         res["xml"] = xml; k = 1
         set_job(pid, log="XML Premiere: " + xml)
     if mp4:
@@ -446,6 +458,9 @@ def api_edit_save(pid):
                   "fx": "cut" if z.get("fx") == "cut" else "blur"}
                  for i, z in enumerate(d.get("zooms", [])) if float(z["e"]) - float(z["s"]) > 0.2]
         ed.update(keep=keep, zooms=zooms)
+        if "censor" in d:
+            ed["censor"] = [{"s": float(c["s"]), "e": float(c["e"]), "w": str(c.get("w", ""))[:40], "on": bool(c.get("on", True))}
+                            for c in d["censor"]]
         for k in ("zoom", "blur", "out"):
             if k in d:
                 ed[k] = d[k]
@@ -587,7 +602,7 @@ def api_autocam(pid):
 @app.route("/api/project/<pid>/analyze", methods=["POST"])
 def api_analyze(pid):
     opts = request.json or {}
-    update(pid, status="analyzing")
+    update(pid, status="analyzing", clip_censor=bool(opts.get("censor")))
     ok = start_job(pid, "analyze", lambda: job_analyze(pid, opts))
     return jsonify({"ok": ok})
 

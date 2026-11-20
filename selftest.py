@@ -47,6 +47,10 @@ def run(out_path):
     step("montaggio: zoom con motion blur", lambda: fx.update(autoedit.render_fx(vid, info, cam, ed, os.path.join(d, "fx"))) or len(fx))
     step("montaggio: xml", lambda: premiere.build_autoedit_xml(ed, vid, info, cam, os.path.join(d, "ae.xml"), fx=fx))
     step("montaggio: mp4", lambda: media.probe(autoedit.render(vid, info, cam, ed, os.path.join(d, "ae.mp4")))["dur"])
+    step("montaggio con trascrizione (spam + parolacce)", lambda: autoedit.analyze_edit(vid, info, cam, {"ritmo": "veloce", "range": [0, 30], "censor": True, "nospam": True, "model": "tiny"}, log=lambda m: None)["report"])
+    from core import words as W
+    step("filtro parole", lambda: (W.censor_ranges([{"w": "cazzo", "s": 1, "e": 1.4}, {"w": "porco", "s": 2, "e": 2.3}, {"w": "dio", "s": 2.3, "e": 2.6}]),
+                                    W.find_spam([{"s": 0, "e": 2, "text": "fate tap tap ragazzi"}]))[0].__len__())
     step("rilevamento voce (VAD)", lambda: len(autoedit.speech_segments(vid, 0, 20, "jumpcut")))
     from core import updater
     step("versione inclusa", lambda: updater.current_version() if updater.current_version() != "dev" else (_ for _ in ()).throw(RuntimeError("version.txt mancante")))

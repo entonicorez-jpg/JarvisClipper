@@ -215,7 +215,7 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
         <p>Trascina le maniglie verdi sulla timeline (o usa "Inizio qui / Fine qui" mentre guardi). Rotellina = zoom sulla timeline.</p></div>
         <div class="sp"></div><button class="pri" onclick="rangeNext()">Avanti →</button></div>
       <div class="player"><video id="rv" controls preload="metadata"></video></div>
-      <div class="tl" id="rtlBox"><canvas id="rtl" height="130"></canvas></div>
+      <div class="tl" id="rtlBox"><canvas id="rtl" height="150"></canvas></div>
       <div class="rangeinfo">
         <div class="pill"><small>Inizio</small><input type="text" id="rStart" onchange="rangeTyped()"></div>
         <div class="pill"><small>Fine</small><input type="text" id="rEnd" onchange="rangeTyped()"></div>
@@ -224,7 +224,7 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
         <button onclick="rangeSetHere('e')">Fine qui ⏭</button>
         <button onclick="rangeAll()">Tutto il VOD</button>
         <div style="flex:1"></div>
-        <span class="hint">Le parti più chiare sulla timeline sono i momenti con più volume.</span>
+        <span class="hint">Nella fascia VOLUME i picchi arancioni sono i momenti in cui urli o ridi.</span>
       </div>
     </div>
 
@@ -275,6 +275,7 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
             <select id="oModel"><option value="base">Veloce</option><option value="small" selected>Bilanciata</option><option value="medium">Massima (lenta)</option></select></label>
           <label>Durata max (s) <input type="number" id="oMax" min="15" max="180" value="59" style="width:90px"></label>
           <label>Durata min (s) <input type="number" id="oMin" min="5" max="60" value="15" style="width:90px"></label>
+          <label style="flex-direction:row;align-items:center;gap:8px;margin-bottom:10px;color:var(--txt)"><input type="checkbox" id="oCensor" checked style="accent-color:var(--acc)"> 🤬 bip sulle parolacce</label>
           <div style="flex:1"></div>
           <button class="pri" id="anBtn" onclick="startAnalyze()">🔎 Trova le clip virali</button>
         </div>
@@ -303,6 +304,9 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
           <label class="field">Forza dello zoom <select id="eZoom"><option value="leggero">Leggero · 118%</option><option value="normale" selected>Normale · 132%</option><option value="forte">Forte · 150%</option></select></label>
           <label class="field">Quanti zoom <select id="eDens"><option value="pochi">Pochi · solo le reazioni forti</option><option value="normali">Normali · reazioni + qualche zoom a ritmo</option><option value="tanti" selected>Tanti · reazioni + zoom ogni 2 clip</option><option value="ogni_frase">Ogni frase · alterna zoom a ogni clip</option></select></label>
           <div class="hint" style="margin:-4px 0 10px">Jarvis ascolta dove parli (rilevamento voce) per tagliare, e mette lo zoom con motion blur dove alzi la voce o reagisci. Gli zoom "a ritmo" entrano con uno stacco netto.</div>
+          <label class="tog"><input type="checkbox" id="eNoSpam" checked> ✂️ Togli lo spam TikTok (ringraziamenti, tap tap, follow, regali…)</label>
+          <label class="tog"><input type="checkbox" id="eCensor" checked> 🤬 Bip sulle parolacce</label>
+          <label class="field" id="eModelBox">Precisione nel capire cosa dici <select id="eModel"><option value="base">Veloce</option><option value="small" selected>Bilanciata</option><option value="medium">Massima (lenta)</option></select></label>
           <label class="tog"><input type="checkbox" id="eFull" checked> Cam quasi a tutto schermo sulle reazioni più forti</label>
           <label class="tog"><input type="checkbox" id="eBlur" checked> Motion blur quando lo zoom entra</label>
           <label class="tog"><input type="checkbox" id="eOutBlur" checked> Anche l'uscita animata (se no: stacco netto)</label>
@@ -509,7 +513,7 @@ function rangeInit(force){
   if(R&&!force)return;
   const dur=P.info.dur, r=P.range||[0,dur];
   if(!R){R={s:r[0],e:r[1],tl:new TL(box,0,dur),energy:null,stripImg:null};v.src=`/api/project/${PID}/src`;
-    api(`/api/project/${PID}/energy?start=0&end=${dur}&step=${Math.max(0.5,dur/1500).toFixed(1)}`).then(d=>{R.energy=d;rangeDraw()});
+    api(`/api/project/${PID}/energy?start=0&end=${dur}&step=${Math.max(0.5,dur/1500).toFixed(1)}`).then(d=>{const so=[...d.v].sort((a,b)=>a-b);d.p94=so[Math.floor(so.length*0.94)]||-14;R.energy=d;rangeDraw()});
     v.ontimeupdate=()=>rangeDraw();
     new ResizeObserver(()=>rangeDraw()).observe($('#rtlBox'));
     box.onwheel=e=>{e.preventDefault();if(e.shiftKey)R.tl.pan((R.tl.b-R.tl.a)*e.deltaY/1000);else R.tl.zoomAt(e.offsetX,e.deltaY>0?1.25:0.8);rangeDraw()};
@@ -531,18 +535,23 @@ function rangeUnload(){const v=$('#rv');v.pause()}
 function rangeDraw(){
   if(!R)return;const tl=R.tl;tl.resize();const x=tl.ctx(),W=tl.W,H=tl.H,dur=P.info.dur;
   x.clearRect(0,0,W,H);tl.ruler(x,0,18);
-  const top=20,th=H-top-26;
-  if(R.stripImg&&P.strip){const n=P.strip.n,tw=R.stripImg.width/n,tdur=dur/n;
-    for(let i=0;i<n;i++){const t0=i*tdur,t1=t0+tdur;if(t1<tl.a||t0>tl.b)continue;const x0=tl.x(t0),x1=tl.x(t1);
-      x.drawImage(R.stripImg,i*tw,0,tw,R.stripImg.height,x0,top,x1-x0+1,th)}}
-  else{x.fillStyle='#14181e';x.fillRect(0,top,W,th);x.fillStyle='#6b7380';x.fillText('miniature in preparazione…',10,top+20)}
-  if(R.energy){const e=R.energy,st=e.step;x.fillStyle='rgba(83,252,24,.55)';
-    for(let i=0;i<e.v.length;i++){const t=i*st;if(t<tl.a-st||t>tl.b)continue;const h=clamp((e.v[i]+60)/55,0,1)*th*0.6;const px=tl.x(t);x.fillRect(px,top+th-h,Math.max(1,tl.x(t+st)-px),h)}}
+  const top=20,th=62,wy=top+th+2,wh=H-wy-26;   // miniature, poi fascia del volume, poi barra
+  x.fillStyle='#14181e';x.fillRect(0,top,W,th);
+  if(R.stripImg&&P.strip){const n=P.strip.n,sw=R.stripImg.width/n,sh=R.stripImg.height,tw=th*16/9,tdur=dur/n;
+    // miniature con le proporzioni giuste: una ogni ~110 px, presa dal momento al centro dello slot
+    for(let px=0;px<W;px+=tw){const t=tl.t(px+tw/2),i=clamp(Math.floor(t/tdur),0,n-1);
+      x.drawImage(R.stripImg,i*sw,0,sw,sh,px,top,tw-1,th)}}
+  else{x.fillStyle='#6b7380';x.font='11px Segoe UI';x.fillText('miniature in preparazione…',10,top+20)}
+  x.fillStyle='#0b0d10';x.fillRect(0,wy,W,wh);
+  if(R.energy){const e=R.energy,st=e.step;
+    const i0=Math.max(0,Math.floor(tl.a/st)),i1=Math.min(e.v.length,Math.ceil(tl.b/st)),k=Math.max(1,Math.floor((i1-i0)/W));
+    for(let i=i0;i<i1;i+=k){let m=-70;for(let j=i;j<Math.min(i1,i+k);j++)m=Math.max(m,e.v[j]);
+      const h=clamp((m+60)/55,0,1)*wh,px=tl.x(i*st);x.fillStyle=m>=e.p94?'#ffb020':'#2e9d5a';x.fillRect(px,wy+wh-h,Math.max(1,tl.x((i+k)*st)-px),h)}}
+  x.fillStyle='#0b0d10cc';x.fillRect(0,wy,48,13);x.fillStyle='#8b94a3';x.font='bold 9px Segoe UI';x.fillText('VOLUME',4,wy+10);
   // fuori selezione scurito
-  x.fillStyle='rgba(0,0,0,.62)';const sx=tl.x(R.s),ex=tl.x(R.e);x.fillRect(0,top,Math.max(0,sx),th);x.fillRect(ex,top,W-ex,th);
-  x.strokeStyle='#53fc18';x.lineWidth=2;x.strokeRect(sx,top+1,ex-sx,th-2);
-  for(const px of [sx,ex]){x.fillStyle='#53fc18';x.fillRect(px-4,top,8,th);x.fillStyle='#061006';x.fillRect(px-1,top+th/2-8,2,16)}
-  // barra per spostare la selezione
+  const sx=tl.x(R.s),ex=tl.x(R.e);x.fillStyle='rgba(0,0,0,.68)';x.fillRect(0,top,Math.max(0,sx),th+wh+2);x.fillRect(ex,top,W-ex,th+wh+2);
+  x.strokeStyle='#53fc18';x.lineWidth=2;x.strokeRect(sx,top+1,ex-sx,th+wh);
+  for(const px of [sx,ex]){x.fillStyle='#53fc18';x.fillRect(px-4,top,8,th+wh+2);x.fillStyle='#061006';x.fillRect(px-1,top+th/2-8,2,16)}
   x.fillStyle='#1a1e25';x.fillRect(0,H-24,W,24);x.fillStyle='#2f6d1f';x.fillRect(sx,H-22,ex-sx,20);x.fillStyle='#c8ffb0';x.font='11px Segoe UI';
   if(ex-sx>90)x.fillText('↔ trascina per spostare la parte',sx+8,H-8);
   const v=$('#rv');const px=tl.x(v.currentTime||0);x.fillStyle='#fff';x.fillRect(px-1,0,2,H-24);
@@ -623,7 +632,7 @@ async function saveLayout(rerender){
 /* ---------- analisi clip ---------- */
 async function startAnalyze(){
   await saveLayout();
-  await api(`/api/project/${PID}/analyze`,{max_clips:+$('#oN').value,model:$('#oModel').value,max_len:+$('#oMax').value,min_len:+$('#oMin').value});
+  await api(`/api/project/${PID}/analyze`,{max_clips:+$('#oN').value,model:$('#oModel').value,max_len:+$('#oMax').value,min_len:+$('#oMin').value,censor:$('#oCensor').checked});
   $('#done').style.display='none';
 }
 
@@ -705,7 +714,7 @@ function camEditInit(){
   im.onload=camDraw;im.src=`/p/${PID}/${P.frames[cFrame]}`;
   $('#eNoCam').checked=!P.edit_cam&&!!P.edit;
   const o=(P.edit&&P.edit.opts)||{};
-  if(o.ritmo)$('#eRitmo').value=o.ritmo; if(o.zoom)$('#eZoom').value=o.zoom; if(o.densita)$('#eDens').value=o.densita;
+  if(o.ritmo)$('#eRitmo').value=o.ritmo; if(o.zoom)$('#eZoom').value=o.zoom; if(o.densita)$('#eDens').value=o.densita; if(o.nospam!=null)$('#eNoSpam').checked=o.nospam; if(o.censor!=null)$('#eCensor').checked=o.censor; if(o.model)$('#eModel').value=o.model;
   if(o.full_cam!=null)$('#eFull').checked=o.full_cam; if(o.blur!=null)$('#eBlur').checked=o.blur; if(o.out)$('#eOutBlur').checked=o.out==='blur';
 }
 function cpos(e){const b=$('#cov').getBoundingClientRect(),k=P.info.w/b.width;return{x:(e.clientX-b.left)*k,y:(e.clientY-b.top)*k,k}}
@@ -721,19 +730,19 @@ $('#eNoCam').addEventListener('change',()=>{camDraw();camSave()});
 async function autoCamEdit(){const r=await api(`/api/project/${PID}/autocam`,{split:0.4});
   if(r.cam){CE.cam=r.cam;$('#eNoCam').checked=false;camDraw();camSave()}else alert('Non ho trovato la faccia: disegna il riquadro a mano.')}
 async function startEdit(){await camSave();
-  const r=await api(`/api/project/${PID}/edit/analyze`,{ritmo:$('#eRitmo').value,zoom:$('#eZoom').value,densita:$('#eDens').value,
+  const r=await api(`/api/project/${PID}/edit/analyze`,{ritmo:$('#eRitmo').value,zoom:$('#eZoom').value,densita:$('#eDens').value,nospam:$('#eNoSpam').checked,censor:$('#eCensor').checked,model:$('#eModel').value,
     full_cam:$('#eFull').checked,blur:$('#eBlur').checked,out:$('#eOutBlur').checked?'blur':'netto'});
   if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else{ED=null;$('#jobbar').classList.remove('hidden')}}
 
 /* ---------- 4b: EDITOR ---------- */
 let ED=null, edrag=null, hist=[], redo=[], saveT=null, raf=null, montato=true, sel=null;
 const T_IN=0.26, T_OUT=0.18, LANES={ruler:[0,18],audio:[20,58],cut:[82,46],zoom:[134,46]};
-function edUnload(){const v=$('#ev');if(v){v.pause()}cancelAnimationFrame(raf);raf=null}
+function edUnload(){const v=$('#ev');if(v){v.pause()}cancelAnimationFrame(raf);raf=null;if(typeof edBeep==='function')edBeep(false)}
 async function edLoad(){
   const v=$('#ev');
   const p=P; if(!p.edit){return}
   const e=JSON.parse(JSON.stringify(p.edit));
-  ED={keep:e.keep,zooms:e.zooms,zoom:e.zoom||1.32,blur:e.blur!==false,out:e.out||'blur',range:e.range,report:e.report,cam:p.edit_cam,energy:null,
+  ED={keep:e.keep,zooms:e.zooms,censor:e.censor||[],spam:e.spam||[],zoom:e.zoom||1.32,blur:e.blur!==false,out:e.out||'blur',range:e.range,report:e.report,cam:p.edit_cam,energy:null,
       tl:new TL($('#etl'),e.range[0],e.range[1])};
   const span=e.range[1]-e.range[0];ED.tl.b=ED.tl.a+Math.min(span,240);  // parte con ~4 minuti visibili
   hist=[];redo=[];sel=null;
@@ -773,12 +782,16 @@ function edTick(){
   if(st.v&&st.z>1.0005){const F=1-1/st.v.S,fx=st.v.x0/F*k,fy=st.v.y0/F*k;
     v.style.transformOrigin=`${fx}px ${fy}px`;v.style.transform=`scale(${st.z})`;v.style.filter=st.blur>0.5?`blur(${st.blur.toFixed(1)}px)`:'none'}
   else{v.style.transform='none';v.style.filter='none'}
+  const cz=montato&&ED.censor.some(c=>c.on&&t>=c.s&&t<c.e);edBeep(cz&&!v.paused);v.muted=cz;
   $('#ebadge').textContent=montato?(st.lv===2?'MONTATO · CAM PIENA':st.lv===1?'MONTATO · ZOOM CAM':(keepAt(t)?'MONTATO':'MONTATO · (parte tagliata)')):'ORIGINALE';
   $('#ePlay').textContent=v.paused?'▶ Play':'⏸ Pausa';
   $('#eTc').innerHTML=`montato <b>${tcs(srcToEdited(t))}</b> / ${tcs(ED.report?ED.report.durata_finale:0)} · nel VOD ${tcs(t)}`;
   if(!v.paused&&!edrag)ED.tl.follow(t);
   edDraw();
 }
+let actx=null,osc=null;
+function edBeep(on){if(on&&!osc){try{actx=actx||new AudioContext();osc=actx.createOscillator();const g=actx.createGain();g.gain.value=0.12;osc.frequency.value=1000;osc.connect(g).connect(actx.destination);osc.start()}catch(e){}}
+  else if(!on&&osc){try{osc.stop()}catch(e){}osc=null}}
 function edToggle(){const v=$('#ev');if(v.paused){if(v.currentTime<ED.range[0]||v.currentTime>=ED.range[1]-0.05)v.currentTime=ED.keep[0][0];v.play()}else v.pause()}
 document.querySelectorAll('#ePrevSeg button').forEach(b=>b.onclick=()=>{montato=b.dataset.m==='1';document.querySelectorAll('#ePrevSeg button').forEach(x=>x.classList.toggle('on',x===b))});
 /* --- disegno timeline --- */
@@ -799,7 +812,14 @@ function edDraw(){
   ED.keep.forEach((k,i)=>{if(k[1]<tl.a||k[0]>tl.b)return;const x0=tl.x(k[0]),x1=tl.x(k[1]);
     const isSel=sel&&sel.type==='keep'&&sel.i===i;x.fillStyle=isSel?'#6fff3a':'#2f8f1c';x.fillRect(x0,cy+3,Math.max(1,x1-x0-1),ch-6);
     if(x1-x0>14){x.fillStyle='#0c2a06';x.fillRect(x0,cy+3,2,ch-6);x.fillRect(x1-3,cy+3,2,ch-6)}});
+  for(const sp of ED.spam){if(sp.e<tl.a||sp.s>tl.b)continue;if(ED.keep.some(k=>k[0]<sp.e-0.05&&k[1]>sp.s+0.05))continue;
+    const x0=tl.x(sp.s),x1=tl.x(sp.e);x.fillStyle='rgba(168,85,247,.75)';x.fillRect(x0,cy+3,Math.max(2,x1-x0),ch-6);
+    if(x1-x0>34){x.fillStyle='#f3e8ff';x.font='bold 10px Segoe UI';x.fillText('SPAM',x0+4,cy+ch/2+4)}}
   if(sel&&sel.type==='gap'){x.strokeStyle='#ff3d5a';x.lineWidth=2;x.strokeRect(tl.x(sel.a),cy+2,tl.x(sel.b)-tl.x(sel.a),ch-4)}
+  ED.censor.forEach((c,i)=>{if(c.e<tl.a||c.s>tl.b)return;const x0=tl.x(c.s),w=Math.max(4,tl.x(c.e)-x0),isSel=sel&&sel.type==='censor'&&sel.i===i;
+    x.fillStyle=c.on?(isSel?'#ff8095':'#ff3d5a'):'#3a414d';x.fillRect(x0,ay+2,w,ah-4);
+    if(isSel){x.strokeStyle='#fff';x.lineWidth=2;x.strokeRect(x0,ay+2,w,ah-4)}
+    if(w>16){x.fillStyle='#fff';x.font='bold 9px Segoe UI';x.fillText(c.on?'BIP':'off',x0+2,ay+ah/2+3)}});
   // corsia zoom
   x.fillStyle='#0f1216';x.fillRect(0,zy,W,zh);
   // sagome delle clip anche nella corsia zoom: lo zoom si aggancia a queste
@@ -821,7 +841,8 @@ function edDraw(){
 /* --- interazione timeline --- */
 const etl=$('#etl');
 function edHit(xp,yp){const tl=ED.tl,t=tl.t(xp),tol=7*(tl.b-tl.a)/tl.W;
-  const [zy,zh]=LANES.zoom,[cy,ch]=LANES.cut;
+  const [zy,zh]=LANES.zoom,[cy,ch]=LANES.cut,[ay,ah]=LANES.audio;
+  if(yp>=ay&&yp<=ay+ah){const i=ED.censor.findIndex(c=>t>=c.s-tol&&t<=c.e+tol);if(i>=0)return{type:'censor',i,t}}
   if(yp>=zy&&yp<=zy+zh){for(const z of ED.zooms){if(Math.abs(t-z.s)<tol)return{type:'zoom',z,edge:'s',t};if(Math.abs(t-z.e)<tol)return{type:'zoom',z,edge:'e',t};if(t>z.s&&t<z.e)return{type:'zoom',z,edge:null,t}}return{type:'zoomlane',t}}
   if(yp>=cy&&yp<=cy+ch){for(let i=0;i<ED.keep.length;i++){const k=ED.keep[i];
       if(Math.abs(t-k[0])<tol)return{type:'keep',i,edge:0,t};if(Math.abs(t-k[1])<tol)return{type:'keep',i,edge:1,t};if(t>=k[0]&&t<k[1])return{type:'keep',i,edge:null,t}}
@@ -835,6 +856,7 @@ etl.onmousedown=e=>{if(!ED)return;const h=edHit(e.offsetX,e.offsetY),v=$('#ev');
   if(h.type==='zoom'){pushHist();sel={type:'zoom',id:h.z.id};edrag={type:'zoom',z:h.z,edge:h.edge,t0:h.t,s:h.z.s,e:h.z.e};edInsp();return}
   if(h.type==='keep'){sel={type:'keep',i:h.i};if(h.edge!=null){pushHist();edrag={type:'keep',i:h.i,edge:h.edge}}else{v.currentTime=h.t;edrag={type:'seek'}}edInsp();return}
   if(h.type==='gap'){sel={type:'gap',a:h.a,b:h.b};v.currentTime=h.t;edInsp();}
+  if(h.type==='censor'){sel={type:'censor',i:h.i};edInsp();edDraw()}
 };
 etl.ondblclick=e=>{if(!ED)return;const h=edHit(e.offsetX,e.offsetY);if(h.type==='zoomlane')edAddZoom(h.t)};
 window.addEventListener('mousemove',e=>{if(!edrag||!ED)return;const b=etl.getBoundingClientRect(),t=clamp(ED.tl.t(e.clientX-b.left),ED.range[0],ED.range[1]);
@@ -851,11 +873,13 @@ etl.addEventListener('wheel',e=>{if(!ED)return;e.preventDefault();if(e.shiftKey|
 $('#eZoomTl').oninput=e=>{if(!ED)return;const tl=ED.tl,full=tl.max-tl.min,span=4*Math.pow(Math.max(1.01,full/4),1-e.target.value/100),c=$('#ev').currentTime;
   tl.a=clamp(c-span/2,tl.min,tl.max-span);tl.b=tl.a+span;edDraw()};
 /* --- azioni --- */
-function pushHist(){hist.push(JSON.stringify({k:ED.keep,z:ED.zooms}));if(hist.length>100)hist.shift();redo=[]}
-function edUndo(){if(!hist.length)return;redo.push(JSON.stringify({k:ED.keep,z:ED.zooms}));const s=JSON.parse(hist.pop());ED.keep=s.k;ED.zooms=s.z;sel=null;edChanged(true)}
-function edRedo(){if(!redo.length)return;hist.push(JSON.stringify({k:ED.keep,z:ED.zooms}));const s=JSON.parse(redo.pop());ED.keep=s.k;ED.zooms=s.z;sel=null;edChanged(true)}
+function snap(){return JSON.stringify({k:ED.keep,z:ED.zooms,c:ED.censor})}
+function restore(j){const s=JSON.parse(j);ED.keep=s.k;ED.zooms=s.z;ED.censor=s.c||[]}
+function pushHist(){hist.push(snap());if(hist.length>100)hist.shift();redo=[]}
+function edUndo(){if(!hist.length)return;redo.push(snap());restore(hist.pop());sel=null;edChanged(true)}
+function edRedo(){if(!redo.length)return;hist.push(snap());restore(redo.pop());sel=null;edChanged(true)}
 function edChanged(){edInsp();edStatsLocal();edDraw();clearTimeout(saveT);saveT=setTimeout(edSave,500)}
-async function edSave(){if(!ED)return;const r=await api(`/api/project/${PID}/edit/save`,{keep:ED.keep,zooms:ED.zooms,zoom:ED.zoom,blur:ED.blur,out:ED.out});if(r.report){ED.report=r.report;edStats()}}
+async function edSave(){if(!ED)return;const r=await api(`/api/project/${PID}/edit/save`,{keep:ED.keep,zooms:ED.zooms,zoom:ED.zoom,blur:ED.blur,out:ED.out,censor:ED.censor});if(r.report){ED.report=r.report;edStats()}}
 function snapPts(){const p=[ED.range[0],ED.range[1]];for(const k of ED.keep)p.push(k[0],k[1]);return p}
 function snapT(t){const tol=10*(ED.tl.b-ED.tl.a)/ED.tl.W;let best=t,bd=tol;for(const p of snapPts()){const d=Math.abs(p-t);if(d<bd){bd=d;best=p}}return best}
 function clipIndexAt(t){let i=ED.keep.findIndex(k=>t>=k[0]&&t<k[1]);if(i<0)i=ED.keep.findIndex(k=>k[0]>=t);return i}
@@ -871,6 +895,8 @@ function edExtend(){const z=selZoom();if(!z)return;const nx=ED.keep.find(k=>k[1]
 function edShrink(){const z=selZoom();if(!z)return;const pv=[...ED.keep].reverse().find(k=>k[1]<z.e-0.05&&k[1]>z.s+0.2);if(!pv)return;pushHist();z.e=pv[1];edChanged()}
 function edExtendStart(){const z=selZoom();if(!z)return;const pv=[...ED.keep].reverse().find(k=>k[0]<z.s-0.05);if(!pv)return;
   const blk=[...ED.zooms].reverse().find(q=>q!==z&&q.e<=z.s+0.01&&q.e>pv[0]);pushHist();z.s=blk?blk.e:pv[0];edChanged()}
+function edCensor(on){const c=sel&&sel.type==='censor'?ED.censor[sel.i]:null;if(!c)return;pushHist();c.on=on;edChanged()}
+function edCensorAll(on){pushHist();ED.censor.forEach(c=>c.on=on);edChanged()}
 function edSetFx(fx){const z=selZoom();if(!z)return;pushHist();z.fx=fx;edChanged()}
 function edSplit(){const t=$('#ev').currentTime,i=ED.keep.findIndex(k=>t>k[0]+0.1&&t<k[1]-0.1);if(i<0)return;pushHist();const k=ED.keep[i];ED.keep.splice(i,1,[k[0],t],[t,k[1]]);sel={type:'keep',i:i+1};edChanged()}
 function edDelete(){if(!sel)return;pushHist();
@@ -898,13 +924,19 @@ function edInsp(){const box=$('#eInsp');let h='<h4>Selezione</h4>';
       <div class="row"><button class="pri" onclick="edAddZoom(null,1)">🔍 Zoom su questa clip <span class="kbd">Z</span></button><button onclick="edAddZoom(null,2)">🔴 Cam piena <span class="kbd">X</span></button></div>
       <div class="row"><button onclick="edGo(${k[0]+1.5})">▶ Guardalo</button><button onclick="edDelete()">✂ Taglia questo pezzo</button></div>
       <div class="hint" style="margin-top:6px">Tira i bordi per allargarlo o stringerlo. "Spezza qui" lo divide sul cursore.</div>`}
-  else if(sel.type==='gap'){h+=`<b>🟥 Parte tagliata</b><div class="hint">${tcs(sel.a)} → ${tcs(sel.b)} · ${(sel.b-sel.a).toFixed(1)} s</div>
+  else if(sel.type==='censor'){const c=ED.censor[sel.i];if(!c){sel=null;return edInsp()}
+    h+=`<b>🤬 Parolaccia</b><div class="hint">«${esc(c.w)}» a ${tcs(c.s)}</div>
+      <div class="row"><div class="seg"><button class="${c.on?'on':''}" onclick="edCensor(true)">Bip</button><button class="${!c.on?'on':''}" onclick="edCensor(false)">Lasciala</button></div></div>
+      <div class="row"><button onclick="edGo(${c.s})">▶ Ascolta</button><button onclick="edCensorAll(false)">Togli tutti i bip</button><button onclick="edCensorAll(true)">Bip su tutte</button></div>`}
+  else if(sel.type==='gap'){const sp=ED.spam.filter(q=>q.s<sel.b-0.05&&q.e>sel.a+0.05);
+    h+=`<b>${sp.length?'🟪 Tagliato come spam TikTok':'🟥 Parte tagliata'}</b><div class="hint">${tcs(sel.a)} → ${tcs(sel.b)} · ${(sel.b-sel.a).toFixed(1)} s</div>
+      ${sp.map(q=>`<div class="chip" style="margin-top:6px;border-color:#a855f7">«${esc(q.text)}»<br><small style="color:var(--mut)">parola chiave: ${esc(q.why)}</small></div>`).join('')}
       <div class="row"><button class="pri" onclick="edRestore()">↩ Rimettila</button></div>`}
   box.innerHTML=h}
 function edStatsLocal(){ED.report=Object.assign({},ED.report||{},{durata_finale:ED.keep.reduce((s,k)=>s+k[1]-k[0],0),tagli:ED.keep.length,
   zoom:ED.zooms.filter(z=>z.lv===1).length,cam_piena:ED.zooms.filter(z=>z.lv===2).length});ED.report.tagliato=(ED.range[1]-ED.range[0])-ED.report.durata_finale;edStats()}
 function edStats(){const r=ED.report||{};const box=(k,v)=>`<div class="stat"><small>${k}</small><b>${v}</b></div>`;
-  $('#eStats').innerHTML=box('Prima',tcs(ED.range[1]-ED.range[0]))+box('Dopo',tcs(r.durata_finale||0))+box('Pezzi',r.tagli||0)+box('Tolti',tcs(r.tagliato||0))+box('Zoom',r.zoom||0)+box('Cam piena',r.cam_piena||0)}
+  $('#eStats').innerHTML=box('Prima',tcs(ED.range[1]-ED.range[0]))+box('Dopo',tcs(r.durata_finale||0))+box('Pezzi',r.tagli||0)+box('Tolti',tcs(r.tagliato||0))+box('Zoom',r.zoom||0)+box('Cam piena',r.cam_piena||0)+box('Spam tolto',(ED.spam||[]).length)+box('Bip',(ED.censor||[]).filter(c=>c.on).length)}
 async function edTruePreview(){await edSave();const r=await api(`/api/project/${PID}/edit/preview`,{t:$('#ev').currentTime});if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else $('#jobbar').classList.remove('hidden')}
 async function edExport(xml,mp4){await edSave();const r=await api(`/api/project/${PID}/edit/export`,{premiere:xml,mp4});if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else{$('#jobbar').classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'})}}
 window.addEventListener('keydown',e=>{if(VIEW!=='vEditor'||!ED||/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName))return;const v=$('#ev');
