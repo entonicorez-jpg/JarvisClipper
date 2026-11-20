@@ -1,0 +1,107 @@
+diff --git a/crates/engine/src/commands.rs b/crates/engine/src/commands.rs
+index 44399e4..8a5b56f 100644
+--- a/crates/engine/src/commands.rs
++++ b/crates/engine/src/commands.rs
+@@ -842,6 +842,21 @@ pub fn linked_roll_pairs(seq: &filmcraft_project::Sequence, left: ClipId, right:
+ }
+ 
+ /// Keep each selected identity once, then expand linked partners when linked selection is on.
++// Jarvis: time of the last Add Edit in each sequence, for Add Edit and Select.
++static JARVIS_LAST_CUT: std::sync::Mutex<Option<(String, Tick)>> = std::sync::Mutex::new(None);
++
++fn jarvis_note_cut(s: &Session, t: Tick) {
++    let key = format!("{:?}", s.state.active_sequence);
++    if let Ok(mut g) = JARVIS_LAST_CUT.lock() {
++        *g = Some((key, t));
++    }
++}
++
++fn jarvis_prev_cut(s: &Session) -> Option<Tick> {
++    let key = format!("{:?}", s.state.active_sequence);
++    JARVIS_LAST_CUT.lock().ok().and_then(|g| g.as_ref().filter(|(k, _)| *k == key).map(|(_, t)| *t))
++}
++
+ pub fn with_links(s: &Session, clips: &[ClipId]) -> Vec<ClipId> {
+     let mut out = Vec::new();
+     for c in clips {
+@@ -2726,6 +2741,7 @@ fn build() -> Vec<CommandSpec> {
+         }),
+         cmd!("sequence.addEdit", "Add Edit", ["Sequence"], Some("Cmd+K"), r#"{"time":ticks?}"#, has_seq, |s, p| {
+             let t = time_p(s, p, "").unwrap_or(s.playhead());
++            jarvis_note_cut(s, t);
+             // Like Premiere: selected clips under the playhead are cut, and only they (#164);
+             // with none, the targeted tracks are.
+             let sel = s.state.selection.clone();
+@@ -2739,6 +2755,39 @@ fn build() -> Vec<CommandSpec> {
+             };
+             Ok(json!({"cuts": n.len()}))
+         }),
++        cmd!("sequence.addEditSelect", "Add Edit and Select", ["Sequence"], None, r#"{"time":ticks?}"#, has_seq, |s, p| {
++            // Jarvis: Add Edit, then select the piece that ends at the cut (between this cut and
++            // the previous one), so the next Delete / Ripple Delete removes it.
++            let t = time_p(s, p, "").unwrap_or(s.playhead());
++            let t = s.sequence_rate().snap(t);
++            let prev = jarvis_prev_cut(s).filter(|pv| *pv < t);
++            let r = s.execute("sequence.addEdit", json!({"time": t.0}))?;
++            jarvis_note_cut(s, t);
++            let tg = s.targeting().targeted;
++            let ids: Vec<ClipId> = {
++                let Some(q) = s.active_sequence() else { return Ok(r) };
++                let pick = |only_targeted: bool| -> Vec<ClipId> {
++                    q.all_tracks()
++                        .filter(|tr| !only_targeted || tg.contains(&tr.id))
++                        .flat_map(|tr| {
++                            tr.items
++                                .iter()
++                                .filter(|i| match prev {
++                                    // everything between the previous cut and this one
++                                    Some(pv) => i.start >= pv && i.end() <= t && i.start < t,
++                                    None => i.end() == t && i.start < t,
++                                })
++                                .map(|i| i.id)
++                                .collect::<Vec<_>>()
++                        })
++                        .collect()
++                };
++                let v = pick(true);
++                if v.is_empty() { pick(false) } else { v }
++            };
++            s.state.selection = with_links(s, &ids);
++            Ok(json!({"cuts": r.get("cuts").cloned().unwrap_or(json!(0)), "selected": s.state.selection.len()}))
++        }),
+         cmd!("sequence.addEditAllTracks", "Add Edit to All Tracks", ["Sequence"], Some("Cmd+Shift+K"), r#"{"time":ticks?}"#, has_seq, |s, p| {
+             let t = time_p(s, p, "").unwrap_or(s.playhead());
+             let n = s.edit_sequence("Add Edit to All Tracks", |q, ctx, _| {
+diff --git a/crates/engine/src/project_tools.rs b/crates/engine/src/project_tools.rs
+index 5a91987..7de3d1d 100644
+--- a/crates/engine/src/project_tools.rs
++++ b/crates/engine/src/project_tools.rs
+@@ -278,7 +278,7 @@ pub(crate) fn apply_layout(v: &mut Vec<CommandSpec>) {
+ }
+ 
+ /// The Sequence menu in Premiere's order (submenu items where their submenu goes).
+-const SEQUENCE_MENU: [&str; 34] = [
++const SEQUENCE_MENU: [&str; 35] = [
+     "sequence.settings",
+     "sequence.renderEffectsInToOut",
+     "sequence.renderInToOut",
+@@ -290,6 +290,7 @@ const SEQUENCE_MENU: [&str; 34] = [
+     "sequence.reverseMatchFrame",
+     "sequence.addEdit",
+     "sequence.addEditAllTracks",
++    "sequence.addEditSelect",
+     "trim.edit",
+     "sequence.applyVideoTransition",
+     "sequence.applyAudioTransition",
+diff --git a/crates/ui-egui/src/i18n/it.tsv b/crates/ui-egui/src/i18n/it.tsv
+index fd5f66c..fc6ef4d 100644
+--- a/crates/ui-egui/src/i18n/it.tsv
++++ b/crates/ui-egui/src/i18n/it.tsv
+@@ -20,6 +20,7 @@
+ 	Add Chapter Marker…	Aggiungi marcatore di capitolo…
+ 	Add Edit	Aggiungi taglio
+ 	Add Edit to All Tracks	Aggiungi taglio a tutte le tracce
++	Add Edit and Select	Aggiungi taglio e seleziona
+ 	Add Flash Cue Marker…	Aggiungi marcatore Flash Cue…
+ 	Add Frame Hold	Aggiungi fermo immagine
+ 	Add Guide…	Aggiungi guida…
