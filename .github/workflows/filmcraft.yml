@@ -66,13 +66,20 @@ jobs:
           $env:DIST = Join-Path $PWD 'dist'
           ./packaging/windows/package.ps1 -Arch x64
           Get-ChildItem $env:DIST
+          # funzioni di questa build (lette da Jarvis Clipper) e versione per l'aggiornamento interno
+          $z = Get-ChildItem (Join-Path $env:DIST '*-portable.zip') | Select-Object -First 1
+          $tmp = Join-Path $env:RUNNER_TEMP 'fcj'
+          Expand-Archive -Path $z.FullName -DestinationPath $tmp -Force
+          $inner = Get-ChildItem $tmp -Directory | Select-Object -First 1
+          $dst = if ($inner) { $inner.FullName } else { $tmp }
+          Set-Content -Encoding ascii -Path (Join-Path $dst 'jarvis_caps.txt') -Value @('adjustment', 'update')
+          Set-Content -Encoding ascii -Path (Join-Path $dst 'jarvis_tag.txt') -Value '${{ steps.up.outputs.tag }}'
+          Compress-Archive -Path (Join-Path $tmp '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'FilmCraft-Jarvis-portable.zip') -Force
 
       - name: Pubblica
         if: steps.have.outputs.skip != '1'
         shell: bash
         run: |
-          z=$(ls fc/dist/*-portable.zip | head -1)
-          cp "$z" FilmCraft-Jarvis-portable.zip
           gh release create "${{ steps.up.outputs.tag }}" FilmCraft-Jarvis-portable.zip \
             --title "FilmCraft Jarvis ${{ steps.up.outputs.ver }}" --latest=false \
             --notes "FilmCraft ${{ steps.up.outputs.ver }} ufficiale + comando 'Aggiungi taglio e seleziona' (menu Sequenza). Versione portatile: estrai e apri filmcraft.exe."

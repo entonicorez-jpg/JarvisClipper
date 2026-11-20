@@ -41,7 +41,8 @@ def _p(name, value):
 
 class Doc:
     def __init__(self, info):
-        self.num, self.den = fps_fraction(info["fps"])
+        from .media import edit_rate
+        self.num, self.den = fps_fraction(edit_rate(info)[0])
         self.fps = self.num / self.den
         self.parts, self.n = [], 0
 

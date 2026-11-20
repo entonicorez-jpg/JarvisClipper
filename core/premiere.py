@@ -18,9 +18,9 @@ def path_url(p):
 
 
 def build_xml(clips, src, info, layout, rendered, out_xml):
-    fps = info["fps"]
-    tb = int(round(fps))
-    ntsc = "TRUE" if abs(fps - tb) > 0.01 else "FALSE"
+    from .media import edit_rate
+    fps, tb, ntsc = edit_rate(info)
+    ntsc = "TRUE" if ntsc else "FALSE"
     F = lambda s: int(round(s * fps))
     rate = f"<rate><timebase>{tb}</timebase><ntsc>{ntsc}</ntsc></rate>"
     sw, sh = info["w"], info["h"]
@@ -110,15 +110,16 @@ def build_xml(clips, src, info, layout, rendered, out_xml):
     return out_xml
 
 
-def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=None, bip=None):
+def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=None, bip=None, flavor="premiere", folder=None):
     """Sequenza orizzontale, tutto modificabile:
     V1 = il video tagliato (clip intere, collegate al loro audio);
     V2 = gli zoom come livello sopra (stessa sorgente con Movimento): si spostano, si allungano, si cancellano;
     V3 = entrate/uscite degli zoom già renderizzate con il motion blur;
     A1 = audio originale in un'unica traccia stereo (buchi sulle parolacce), A2 = suoni di censura."""
     from .autoedit import view, subpieces, build_pieces
-    fps = info["fps"]
-    tb = int(round(fps)); ntsc = "TRUE" if abs(fps - tb) > 0.01 else "FALSE"
+    from .media import edit_rate
+    fps, tb, ntsc = edit_rate(info)
+    ntsc = "TRUE" if ntsc else "FALSE"
     F = lambda s: int(round(s * fps))
     rate = f"<rate><timebase>{tb}</timebase><ntsc>{ntsc}</ntsc></rate>"
     W, H = info["w"], info["h"]
@@ -156,6 +157,58 @@ def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=
             zclips.append({"start": s0, "end": s1, "in": i0, "out": i0 + (s1 - s0), "lv": lv})
         if kind != "static":
             fxclips.append((s0, s1, kind, a, b))
+
+    # FilmCraft: gli zoom sono livelli di regolazione con Trasforma (uno per zoom, anche sopra più tagli)
+    adj = []
+    if flavor == "filmcraft":
+        from .autoedit import T_IN, T_OUT
+        for z in sorted(ed["zooms"], key=lambda q: q["s"]):
+            ov = [(max(a, z["s"]), min(b, z["e"])) for _, _, _, a, b in keeps if b > z["s"] and a < z["e"]]
+            if not ov:
+                continue
+            s0, s1 = tl_of(ov[0][0]), tl_of(ov[-1][1])
+            if s0 is None or s1 is None or s1 - s0 < 2:
+                continue
+            adj.append({"start": s0, "end": s1, "lv": z.get("lv", 1), "anim": ed.get("blur", True) and z.get("fx", "blur") != "cut"})
+        rows = []  # tracce per gli zoom che si sovrappongono
+        for z in adj:
+            r = next((i for i, e in enumerate(rows) if e <= z["start"]), None)
+            if r is None:
+                rows.append(0); r = len(rows) - 1
+            rows[r] = z["end"]; z["row"] = r
+        zclips, fxclips = [], []
+
+    def transform(z):
+        x0, y0, w, h, S = view(info, cam, z["lv"], ed["zoom"])
+        fxp = S * x0 / (S - 1) if S > 1.0001 else W / 2
+        fyp = S * y0 / (S - 1) if S > 1.0001 else H / 2
+        d = z["end"] - z["start"]
+        kin = min(F(T_IN), int(d * 0.45)) if z["anim"] else 0
+        kout = min(F(T_OUT), int(d * 0.3)) if z["anim"] and ed.get("out", "blur") == "blur" else 0
+        big = S * 100
+
+        def kf(when, v, bez):
+            ip = "<interpolation><name>bezier</name></interpolation>" if bez else ""
+            return f"<keyframe><when>{when}</when><value>{v:.3f}</value>{ip}</keyframe>"
+        keys = ""
+        if kin > 1:
+            # entrata veloce che frena (come la preview): lineare -> bezier
+            keys += kf(0, 100, False) + kf(kin, big, True)
+        if kout > 1:
+            # uscita che parte piano e accelera: bezier -> lineare
+            keys += kf(d - kout, big, True) + kf(d, 100, False)
+        sc = lambda pid, nm: (f"<parameter><parameterid>{pid}</parameterid><name>{nm}</name><valuemin>0</valuemin>"
+                              f"<valuemax>10000</valuemax><value>{big:.3f}</value>{keys}</parameter>")
+        pt = lambda pid, nm: (f"<parameter><parameterid>{pid}</parameterid><name>{nm}</name>"
+                              f"<value><horiz>{fxp:.2f}</horiz><vert>{fyp:.2f}</vert></value></parameter>")
+        return ("<filter><effect><name>Transform</name><effectid>transform</effectid><effectcategory>Distort</effectcategory>"
+                "<effecttype>filter</effecttype><mediatype>video</mediatype>"
+                + pt("anchor", "Anchor Point") + pt("position", "Position")
+                + "<parameter><parameterid>uniform_scale</parameterid><name>Uniform Scale</name><value>TRUE</value></parameter>"
+                + sc("scale_height", "Scale Height") + sc("scale_width", "Scale Width")
+                + "<parameter><parameterid>shutter_override</parameterid><name>Use Composition's Shutter Angle</name><value>TRUE</value></parameter>"
+                + "<parameter><parameterid>shutter_angle</parameterid><name>Shutter Angle</name><value>360</value></parameter>"
+                + "</effect></filter>")
 
     defined = set()
 
@@ -207,8 +260,20 @@ def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=
                 f"<trackindex>{track}</trackindex><clipindex>{idx + 1}</clipindex></link>")
 
     labels = {1: "ZOOM CAM", 2: "CAM PIENA"}
-    x = ['<?xml version="1.0" encoding="UTF-8"?>', "<!DOCTYPE xmeml>", '<xmeml version="4">',
-         f"<sequence><name>{escape(name)}</name>{rate}<duration>{total}</duration>"
+    x = ['<?xml version="1.0" encoding="UTF-8"?>', "<!DOCTYPE xmeml>", '<xmeml version="4">']
+    if folder:
+        # tutto dentro una cartella del progetto: i file come master clip, poi la sequenza
+        x.append(f"<bin><name>{escape(folder)}</name><children>")
+        x.append(f'<clip id="mc_src"><name>{escape(src_name)}</name><duration>{src_frames}</duration>{rate}'
+                 f'<media><video><track><clipitem id="mci_src"><name>{escape(src_name)}</name>'
+                 + file_el("src", src, src_name, src_frames) + "</clipitem></track></video></media></clip>")
+        if beeps and bip:
+            x.append(f'<clip id="mc_bip"><name>censura.wav</name><duration>{F(3.0)}</duration>{rate}<media><audio><track>'
+                     f'<clipitem id="mci_bip"><name>censura.wav</name><file id="bip"><name>censura.wav</name>'
+                     f"<pathurl>{escape(path_url(bip))}</pathurl>{rate}<duration>{F(3.0)}</duration><media><audio>"
+                     "<samplecharacteristics><depth>16</depth><samplerate>48000</samplerate></samplecharacteristics>"
+                     "<channelcount>2</channelcount></audio></media></file></clipitem></track></audio></media></clip>")
+    x += [f"<sequence><name>{escape(name)}</name>{rate}<duration>{total}</duration>"
          f"<timecode>{rate}<string>00:00:00:00</string><frame>0</frame><displayformat>NDF</displayformat></timecode>"
          f"<media><video><format><samplecharacteristics>{rate}<width>{W}</width><height>{H}</height>"
          "<anamorphic>FALSE</anamorphic><pixelaspectratio>square</pixelaspectratio><fielddominance>none</fielddominance>"
@@ -218,13 +283,28 @@ def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=
         x.append(f'<clipitem id="v{k}"><name>{escape(src_name)}</name><enabled>TRUE</enabled>'
                  f"<duration>{src_frames}</duration>{rate}<start>{st}</start><end>{st + i1 - i0}</end>"
                  f"<in>{i0}</in><out>{i1}</out>" + file_el("src", src, src_name, src_frames) + links + "</clipitem>")
-    x.append("</track><track>")
+    x.append("</track>")
+    for r in range(len(rows) if flavor == "filmcraft" else 0):
+        x.append("<track>")
+        for k, z in enumerate(adj):
+            if z["row"] != r:
+                continue
+            d = z["end"] - z["start"]
+            x.append(f'<generatoritem id="j{k}"><name>{labels.get(z["lv"], "ZOOM")}</name><enabled>TRUE</enabled>'
+                     f"<duration>{max(total, d) + 1}</duration>{rate}<start>{z['start']}</start><end>{z['end']}</end>"
+                     f"<in>0</in><out>{d}</out><effect><name>Livello di regolazione</name><effectid>filmcraft:jarvis.adjustment</effectid>"
+                     "<effectcategory>Matte</effectcategory><effecttype>generator</effecttype><mediatype>video</mediatype></effect>"
+                     + transform(z) + "</generatoritem>")
+        x.append("</track>")
+    if zclips:
+        x.append("<track>")
     for k, z in enumerate(zclips):
         x.append(f'<clipitem id="z{k}"><name>{labels.get(z["lv"], "ZOOM")}</name><enabled>TRUE</enabled>'
                  f"<duration>{src_frames}</duration>{rate}<start>{z['start']}</start><end>{z['end']}</end>"
                  f"<in>{z['in']}</in><out>{z['out']}</out>" + file_el("src", src, src_name, src_frames) + motion(z["lv"]) + "</clipitem>")
-    x.append("</track>")
-    if fx:
+    if zclips:
+        x.append("</track>")
+    if fx and fxclips:
         x.append("<track>")
         for k, (s0, s1, kind, a, b) in enumerate(fxclips):
             fp = fx.get((round(a, 3), round(b, 3)))
@@ -252,12 +332,15 @@ def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=
             ln = max(1, min(ln, bfr))
             fe = (f'<file id="bip"><name>censura.wav</name><pathurl>{escape(path_url(bip))}</pathurl>{rate}<duration>{bfr}</duration>'
                   f"<media><audio><samplecharacteristics><depth>16</depth><samplerate>48000</samplerate></samplecharacteristics>"
-                  f"<channelcount>2</channelcount></audio></media></file>") if k == 0 else '<file id="bip"/>'
+                  f"<channelcount>2</channelcount></audio></media></file>") if (k == 0 and not folder) else '<file id="bip"/>'
             x.append(f'<clipitem id="bp{k}"><name>CENSURA</name><enabled>TRUE</enabled><duration>{bfr}</duration>{rate}'
                      f"<start>{st}</start><end>{st + ln}</end><in>0</in><out>{ln}</out>{fe}"
                      "<sourcetrack><mediatype>audio</mediatype><trackindex>1</trackindex></sourcetrack></clipitem>")
         x.append("</track>")
-    x.append("</audio></media></sequence></xmeml>")
+    x.append("</audio></media></sequence>")
+    if folder:
+        x.append("</children></bin>")
+    x.append("</xmeml>")
     with open(out_xml, "w", encoding="utf-8") as f:
         f.write("".join(x))
     return out_xml

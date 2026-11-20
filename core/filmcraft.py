@@ -20,6 +20,17 @@ def exe():
     return None
 
 
+def has_cap(cap):
+    """Funzioni della build installata (file jarvis_caps.txt messo dalla build di GitHub)."""
+    e = exe()
+    if not e:
+        return False
+    try:
+        return cap in open(os.path.join(os.path.dirname(e), "jarvis_caps.txt"), encoding="utf-8").read().split()
+    except Exception:
+        return False
+
+
 def installed_tag():
     try:
         return open(TAG_FILE, encoding="utf-8").read().strip()

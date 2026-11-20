@@ -932,6 +932,22 @@ index abfbd93..3dea546 100644
          }
      }
  }
+diff --git a/crates/interchange/src/timeline_model.rs b/crates/interchange/src/timeline_model.rs
+index 0a57a1a..b9de096 100644
+--- a/crates/interchange/src/timeline_model.rs
++++ b/crates/interchange/src/timeline_model.rs
+@@ -564,6 +564,11 @@ fn from_project(project: &shared::Project) -> Result<film::Project, serde_json::
+     out.next_id = project.next_id;
+     for (id, item) in &project.items {
+         let kind = match &item.kind {
++            // Jarvis Clipper: `filmcraft:jarvis.adjustment` = livello di regolazione (zoom con Trasforma)
++            shared::ItemKind::Media(m) if matches!(&m.media, shared::MediaRef::Generator(shared::Generator::Other { data, .. }) if data == "jarvis.adjustment") => {
++                let (w, h, rate) = m.info.video.as_ref().map(|v| (v.width, v.height, v.frame_rate)).unwrap_or((1920, 1080, Default::default()));
++                film::ItemKind::AdjustmentLayer { width: w, height: h, rate, duration: m.info.duration }
++            }
+             shared::ItemKind::Media(m) => film::ItemKind::Media(Box::new(from_media(m, &item.ext)?)),
+             shared::ItemKind::Sequence(seq) => film::ItemKind::Sequence(std::sync::Arc::new(from_sequence(seq, &item.ext, &mut builder)?)),
+             shared::ItemKind::Subclip { parent, range } => film::ItemKind::Subclip { parent: film::ItemId(parent.0), range: *range, restrict_trims: false },
 diff --git a/crates/ui-egui/src/app.rs b/crates/ui-egui/src/app.rs
 index 250a7e2..392f4cf 100644
 --- a/crates/ui-egui/src/app.rs

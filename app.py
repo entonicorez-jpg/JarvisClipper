@@ -374,8 +374,12 @@ def job_edit_export(pid, premiere_xml, mp4, kden=False, fcraft=False):
     k = 0
     if proj:
         fxdir = os.path.join(out, f"{base}_zoom_blur_{stamp}")
-        fx = autoedit.render_fx(p["src_path"], p["info"], cam, ed, fxdir,
-                                lambda f, m: set_job(pid, progress=f / steps, msg=m), lambda: stopped(pid))
+        os.makedirs(fxdir, exist_ok=True)
+        fx = None
+        fc_adj = fcraft and filmcraft.has_cap("adjustment")
+        if premiere_xml or kden or (fcraft and not fc_adj):  # con i livelli di regolazione FilmCraft non ne ha bisogno
+            fx = autoedit.render_fx(p["src_path"], p["info"], cam, ed, fxdir,
+                                    lambda f, m: set_job(pid, progress=f / steps, msg=m), lambda: stopped(pid))
         bip = None
         if any(c.get("on", True) for c in ed.get("censor") or []):
             bip = os.path.join(fxdir, "censura.wav")
@@ -390,7 +394,9 @@ def job_edit_export(pid, premiere_xml, mp4, kden=False, fcraft=False):
             set_job(pid, log="XML Premiere: " + xml)
         if fcraft:
             fp_ = os.path.join(out, f"{base}_FILMCRAFT_{time.strftime('%H%M%S')}.xml")
-            premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, fp_, name=f"{base} - Jarvis {time.strftime('%H:%M')}", fx=fx, bip=bip)
+            premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, fp_, name=f"{base} - Jarvis {time.strftime('%H:%M')}",
+                                        fx=None if fc_adj else fx, bip=bip, flavor="filmcraft" if fc_adj else "premiere",
+                                        folder=f"Jarvis {time.strftime('%H:%M')} - {base[:40]}")
             res["filmcraft"] = fp_
             set_job(pid, log="Per FilmCraft: " + fp_)
             try:
