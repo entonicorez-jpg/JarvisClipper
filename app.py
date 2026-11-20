@@ -367,7 +367,7 @@ def job_edit_export(pid, premiere_xml, mp4, kden=False, fcraft=False):
     p = load(pid); ed = p["edit"]; cam = p.get("edit_cam")
     out = p["out_dir"]; os.makedirs(out, exist_ok=True)
     base = re.sub(r'[\\/:*?"<>|]+', "", p.get("name", "video"))[:50]
-    stamp = time.strftime("%H%M")
+    stamp = time.strftime("%H%M%S")
     res = {}
     proj = premiere_xml or kden or fcraft
     steps = (1 if proj else 0) + (1 if mp4 else 0)
@@ -389,8 +389,8 @@ def job_edit_export(pid, premiere_xml, mp4, kden=False, fcraft=False):
             res["xml"] = xml
             set_job(pid, log="XML Premiere: " + xml)
         if fcraft:
-            fp_ = os.path.join(out, f"{base}_FILMCRAFT_{stamp}.xml")
-            premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, fp_, name=f"{base} - Montaggio Jarvis", fx=fx, bip=bip)
+            fp_ = os.path.join(out, f"{base}_FILMCRAFT_{time.strftime('%H%M%S')}.xml")
+            premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, fp_, name=f"{base} - Jarvis {time.strftime('%H:%M')}", fx=fx, bip=bip)
             res["filmcraft"] = fp_
             set_job(pid, log="Per FilmCraft: " + fp_)
             try:

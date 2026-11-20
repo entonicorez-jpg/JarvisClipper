@@ -115,11 +115,54 @@ def start_install():
     return True
 
 
+_live = {"proc": None, "port": None, "token": None}
+
+
+def _control(method, params, timeout=60):
+    """Una richiesta al FilmCraft Jarvis aperto da noi (canale di controllo locale)."""
+    import socket
+    with socket.create_connection(("127.0.0.1", _live["port"]), timeout=timeout) as so:
+        f = so.makefile("rw", encoding="utf-8")
+        f.write(json.dumps({"id": 1, "method": method, "params": params, "token": _live["token"]}) + "\n")
+        f.flush()
+        r = json.loads(f.readline() or "{}")
+    if not r.get("ok"):
+        raise RuntimeError(r.get("error") or "FilmCraft non risponde")
+    return r.get("result")
+
+
+def _free_port():
+    import socket
+    with socket.socket() as so:
+        so.bind(("127.0.0.1", 0))
+        return so.getsockname()[1]
+
+
 def open_xml(xml):
-    """Apre FilmCraft Jarvis con il montaggio già importato. False se non è installato."""
+    """Apre il montaggio in FilmCraft Jarvis. Se l'abbiamo già aperto noi, il montaggio nuovo entra lì
+    come sequenza nuova (niente seconda finestra); altrimenti lo avvia senza recuperare il lavoro
+    vecchio. False se non è installato."""
     e = exe()
     if not e:
         return False
-    subprocess.Popen([e, "--empty", xml], cwd=os.path.dirname(e), close_fds=True,
-                     creationflags=0x00000008 | 0x00000200 if sys.platform == "win32" else 0)
+    pr = _live["proc"]
+    if pr is not None and pr.poll() is None and _live["port"]:
+        try:
+            r = _control("ui.menu.invoke", {"command": "file.import", "params": {"paths": [xml]}}, timeout=300) or {}
+            seqs = r.get("sequences") or []
+            if seqs:
+                _control("ui.menu.invoke", {"command": "sequence.open", "params": {"item": seqs[-1]}})
+            try:
+                _control("ui.focus", {})
+            except Exception:
+                pass
+            return True
+        except Exception:
+            pass  # non risponde: ne apriamo uno nuovo
+    import secrets
+    _live.update(port=_free_port(), token=secrets.token_hex(32))
+    env = dict(os.environ, FILMCRAFT_CONTROL_TOKEN=_live["token"])
+    _live["proc"] = subprocess.Popen([e, "--control", str(_live["port"]), "--no-recover", "--empty", xml],
+                                     cwd=os.path.dirname(e), env=env, close_fds=True,
+                                     creationflags=0x00000200 if sys.platform == "win32" else 0)
     return True
