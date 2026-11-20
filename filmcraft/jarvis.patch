@@ -160,10 +160,10 @@ index 44399e4..3660b2f 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..f14eb11
+index 0000000..024d896
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,722 @@
+@@ -0,0 +1,1059 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -606,7 +606,24 @@ index 0000000..f14eb11
 +    if done == 0 {
 +        return Err(EngineError::Other(last_err.unwrap_or_else(|| "transizione non applicata".into())));
 +    }
-+    Ok(json!({"transitions": done}))
++    let mut sfx = 0;
++    if bool_p(p, "sfx").unwrap_or(true) {
++        let fd = s.sequence_rate().frame_duration();
++        let q = s.active_sequence();
++        let sounds: Vec<_> = clips
++            .iter()
++            .enumerate()
++            .filter_map(|(k, c)| {
++                let id = if pid == "mix" { MIX[k % MIX.len()] } else { pid.as_str() };
++                let tp = TRANSITIONS.iter().find(|x| x.id == id)?;
++                let t = q?.find_item(*c)?.1.end();
++                let f = pick_sfx(sfx_kind(id)?, k)?;
++                Some((f, Tick((t.0 - fd.0 * tp.frames / 2).max(0))))
++            })
++            .collect();
++        sfx = place_sfx(s, sounds, f64_p(p, "sfxGain").unwrap_or(-3.0))?;
++    }
++    Ok(json!({"transitions": done, "sfx": sfx}))
 +}
 +
 +// ---------------------------------------------------------------- effetti sulle clip
@@ -688,7 +705,22 @@ index 0000000..f14eb11
 +        }
 +        Ok(n)
 +    })?;
-+    Ok(json!({"clips": n}))
++    let mut sfx = 0;
++    let kind = match fx.as_str() {
++        "punch" => sfx_kind("punch"),
++        "shake" => sfx_kind("shake_fx"),
++        _ => None,
++    };
++    if let (true, Some(kind)) = (bool_p(p, "sfx").unwrap_or(true), kind) {
++        let q = s.active_sequence();
++        let sounds: Vec<_> = clips
++            .iter()
++            .enumerate()
++            .filter_map(|(k, c)| Some((pick_sfx(kind, k)?, q?.find_item(*c)?.1.start)))
++            .collect();
++        sfx = place_sfx(s, sounds, f64_p(p, "sfxGain").unwrap_or(-3.0))?;
++    }
++    Ok(json!({"clips": n, "sfx": sfx}))
 +}
 +
 +
@@ -860,7 +892,20 @@ index 0000000..f14eb11
 +        }
 +        Ok(done)
 +    })?;
-+    Ok(json!({"transitions": done}))
++    let mut sfx = 0;
++    if bool_p(p, "sfx").unwrap_or(true) {
++        let sounds: Vec<_> = times
++            .iter()
++            .enumerate()
++            .filter_map(|(k, t)| {
++                let preset = if pid == "c_mix" { C_MIX[k % C_MIX.len()] } else { pid.as_str() };
++                let f = pick_sfx(sfx_kind(preset)?, k)?;
++                Some((f, Tick((t.0 - n.0).max(0))))
++            })
++            .collect();
++        sfx = place_sfx(s, sounds, f64_p(p, "sfxGain").unwrap_or(-3.0))?;
++    }
++    Ok(json!({"transitions": done, "sfx": sfx}))
 +}
 +
 +pub fn commands() -> Vec<CommandSpec> {
@@ -885,6 +930,298 @@ index 0000000..f14eb11
 +        ),
 +        spec("jarvis.clipFx", "Jarvis: Effetto clip", r#"{"preset":"punch|zoom_in|zoom_out|shake","amount":f?}"#, clip_fx),
 +    ]
++}
++
++// ---------------------------------------------------------------- effetti sonori (SFX)
++// I suoni vengono dalle cartelle che l'utente ha sul suo PC (Premiere Composer / Mister Horse,
++// "Premiere Composer Files" sul Desktop) o da %LOCALAPPDATA%\FilmCraftJarvis\sfx: non sono nella build.
++
++pub const SFX_TRACK: &str = "SFX Jarvis";
++
++fn sfx_roots() -> Vec<std::path::PathBuf> {
++    let mut v = Vec::new();
++    if let Some(la) = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from) {
++        v.push(la.join("FilmCraftJarvis").join("sfx"));
++        v.push(la.join("MisterHorse").join("ProductManager").join("Products"));
++    }
++    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(std::path::PathBuf::from) {
++        v.push(home.join("Desktop").join("Premiere Composer Files"));
++        v.push(home.join("Documents").join("Premiere Composer Files"));
++    }
++    if let Some(extra) = std::env::var_os("JARVIS_SFX_DIR") {
++        v.push(std::path::PathBuf::from(extra));
++    }
++    v
++}
++
++fn walk_sfx(dir: &std::path::Path, depth: usize, out: &mut Vec<std::path::PathBuf>) {
++    if depth > 6 || out.len() > 400 {
++        return;
++    }
++    let Ok(rd) = std::fs::read_dir(dir) else { return };
++    for e in rd.flatten() {
++        let p = e.path();
++        if p.is_dir() {
++            walk_sfx(&p, depth + 1, out);
++        } else if p.extension().and_then(|x| x.to_str()).is_some_and(|x| matches!(x.to_ascii_lowercase().as_str(), "wav" | "mp3" | "aif" | "aiff" | "flac" | "ogg")) {
++            out.push(p);
++        }
++    }
++}
++
++/// Tutti i suoni trovati (una volta per sessione).
++pub fn sfx_library() -> &'static Vec<std::path::PathBuf> {
++    static LIB: std::sync::OnceLock<Vec<std::path::PathBuf>> = std::sync::OnceLock::new();
++    LIB.get_or_init(|| {
++        let mut v = Vec::new();
++        for r in sfx_roots() {
++            walk_sfx(&r, 0, &mut v);
++        }
++        let mut seen = std::collections::HashSet::new();
++        v.retain(|p| seen.insert(p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default()));
++        v.sort();
++        v
++    })
++}
++
++/// Il suono per un tipo di effetto (`k` fa girare tra quelli disponibili).
++pub fn pick_sfx(kind: &str, k: usize) -> Option<std::path::PathBuf> {
++    let keys: &[&str] = match kind {
++        "swoosh" => &["swoosh 0", "swoosh"],
++        "transition" => &["swoosh transition", "transition basic", "swoosh"],
++        "complex" => &["transition complex", "swoosh transition"],
++        "glitch" => &["glitch", "hiss"],
++        "boom" => &["boom"],
++        "pop" => &["pop"],
++        _ => &["swoosh"],
++    };
++    let lib = sfx_library();
++    for key in keys {
++        let hits: Vec<&std::path::PathBuf> = lib.iter().filter(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default().contains(key)).collect();
++        if !hits.is_empty() {
++            return Some(hits[k % hits.len()].clone());
++        }
++    }
++    None
++}
++
++/// Il tipo di suono di ogni effetto Jarvis.
++pub fn sfx_kind(preset: &str) -> Option<&'static str> {
++    Some(match preset {
++        "c_zoom_in" | "zoom_blur" | "cross_zoom" | "dissolve" => "transition",
++        "c_slide_left" | "c_slide_right" | "c_slide_up" | "c_slide_down" | "c_whip" | "whip" | "push" => "swoosh",
++        "c_zoom_spin" | "spin" | "light_leak" => "complex",
++        "c_glitch" | "glitch" | "vhs" => "glitch",
++        "c_impact" | "shake" | "flash" => "boom",
++        "punch" => "pop",
++        "shake_fx" => "boom",
++        _ => return None,
++    })
++}
++
++fn media_with_path(s: &Session, path: &str) -> Option<filmcraft_project::ItemId> {
++    s.project.items.iter().find_map(|(id, it)| match it.as_media().map(|m| &m.media) {
++        Some(filmcraft_project::MediaRef::File { path: p }) if p == path => Some(*id),
++        _ => None,
++    })
++}
++
++/// Mette i suoni `(file, inizio in timeline)` sulla traccia "SFX Jarvis" (una sola modifica annullabile).
++pub fn place_sfx(s: &mut Session, sounds: Vec<(std::path::PathBuf, Tick)>, gain_db: f64) -> Result<usize> {
++    if sounds.is_empty() {
++        return Ok(0);
++    }
++    let seq_id = s.state.active_sequence.ok_or(EngineError::NoSequence)?;
++    let rate = s.sequence_rate();
++    let mut placed: Vec<(filmcraft_project::ItemId, Tick)> = Vec::new();
++    for (p, t) in sounds {
++        let ps = p.to_string_lossy().to_string();
++        let item = match media_with_path(s, &ps) {
++            Some(i) => i,
++            None => {
++                let r = s.execute("file.import", json!({"paths": [ps.clone()]}))?;
++                match r["items"].as_array().and_then(|a| a.first()).and_then(Value::as_u64) {
++                    Some(i) => filmcraft_project::ItemId(i),
++                    None => continue,
++                }
++            }
++        };
++        placed.push((item, t));
++    }
++    s.edit("Suoni Jarvis", |pr, _st| {
++        let mut items = Vec::new();
++        for (item, t) in &placed {
++            let dur = match pr.item(*item).map(|i| &i.kind) {
++                Some(filmcraft_project::ItemKind::Media(m)) => m.duration(),
++                _ => continue,
++            };
++            let t = rate.snap((*t).max(Tick::ZERO));
++            let Some(mut ti) = pr.make_track_item(*item, TrackKind::Audio, t, TimeRange::new(Tick::ZERO, dur), rate) else { continue };
++            if gain_db != 0.0 {
++                ti.gain_db = gain_db;
++            }
++            items.push(ti);
++        }
++        let mut ids: Vec<TrackId> = Vec::new();
++        for _ in 0..4 {
++            ids.push(TrackId(pr.alloc_id()));
++        }
++        let q = pr.sequence_mut(seq_id).ok_or(EngineError::NoSequence)?;
++        let n = items.len();
++        for ti in items {
++            let range = ti.range();
++            let free = |tr: &Track| !tr.items.iter().any(|i| i.range().overlaps(&range));
++            let idx = q.audio_tracks.iter().position(|tr| tr.name.starts_with(SFX_TRACK) && free(tr));
++            let idx = match idx {
++                Some(i) => i,
++                None => {
++                    let k = q.audio_tracks.iter().filter(|tr| tr.name.starts_with(SFX_TRACK)).count();
++                    let id = ids.pop().unwrap_or(TrackId(0));
++                    let name = if k == 0 { SFX_TRACK.to_string() } else { format!("{SFX_TRACK} {}", k + 1) };
++                    q.audio_tracks.push(Track::new(id, TrackKind::Audio, name));
++                    q.audio_tracks.len() - 1
++                }
++            };
++            q.audio_tracks[idx].items.push(ti);
++            q.audio_tracks[idx].sort();
++        }
++        q.check().map_err(EngineError::Other)?;
++        Ok(n)
++    })
++}
++
++// ---------------------------------------------------------------- trascrizione in background
++
++/// Lavoro di trascrizione preparato sul thread dell'interfaccia e fatto in background.
++pub struct CaptionJob {
++    pub items: Vec<(filmcraft_project::ItemId, filmcraft_media::SharedSource, Vec<(Tick, Tick)>)>,
++    pub model: String,
++    pub language: Option<String>,
++    pub installed: Option<std::sync::Arc<dyn filmcraft_speech::Transcriber>>,
++}
++
++/// Prepara la trascrizione: solo i pezzi di audio usati nella sequenza. None = c'è già.
++pub fn prepare_captions(s: &Session, p: &Value) -> Result<Option<CaptionJob>> {
++    if !crate::transcript::sequence_words(s).is_empty() && !bool_p(p, "retranscribe").unwrap_or(false) {
++        return Ok(None);
++    }
++    let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
++    let pad = Tick::from_seconds_f64(0.5);
++    let mut per: std::collections::BTreeMap<u64, Vec<(Tick, Tick)>> = Default::default();
++    for tr in &q.audio_tracks {
++        if tr.name.starts_with(SFX_TRACK) || tr.muted {
++            continue;
++        }
++        for it in tr.items.iter().filter(|i| i.enabled) {
++            let Some((root, _, _)) = s.project.resolve_media(it.item) else { continue };
++            let len = Tick((it.duration.0 as f64 * it.speed.abs()).round() as i64);
++            let a = Tick((it.source_in.0 - pad.0).max(0));
++            per.entry(root.0).or_default().push((a, it.source_in + len + pad));
++        }
++    }
++    let mut items = Vec::new();
++    for (id, mut rs) in per {
++        let item = filmcraft_project::ItemId(id);
++        let Some(src) = s.source(item) else { continue };
++        if !src.info().has_audio() {
++            continue;
++        }
++        rs.sort();
++        let mut merged: Vec<(Tick, Tick)> = Vec::new();
++        for (a, b) in rs {
++            match merged.last_mut() {
++                Some(l) if a <= l.1 + Tick::from_seconds_f64(1.0) => l.1 = l.1.max(b),
++                _ => merged.push((a, b)),
++            }
++        }
++        items.push((item, src, merged));
++    }
++    if items.is_empty() {
++        return Err(EngineError::Other("nessun audio nella sequenza".into()));
++    }
++    Ok(Some(CaptionJob {
++        items,
++        model: str_p(p, "model").unwrap_or("whisper-small").to_string(),
++        language: Some(str_p(p, "language").unwrap_or("it").to_string()).filter(|l| l != "auto"),
++        installed: s.transcriber.clone(),
++    }))
++}
++
++/// Fa la trascrizione (da chiamare in un thread). `progress(frazione, messaggio)`.
++pub fn run_captions(job: CaptionJob, progress: &(dyn Fn(f32, String) + Sync)) -> std::result::Result<Vec<(filmcraft_project::ItemId, filmcraft_project::Transcript)>, String> {
++    let t: std::sync::Arc<dyn filmcraft_speech::Transcriber> = match job.installed {
++        Some(t) => t,
++        None => {
++            let dir = crate::transcript::models_dir().ok_or("nessuna cartella per i modelli")?;
++            let m = filmcraft_speech::models::find(&job.model).ok_or("modello sconosciuto")?;
++            if !filmcraft_speech::models::installed(&dir, m) {
++                progress(0.0, "Scarico il modello di trascrizione (solo la prima volta)…".into());
++                #[cfg(feature = "speech-download")]
++                filmcraft_speech::models::download(&dir, m, &mut |a, b, _| {
++                    if b > 0 {
++                        progress(0.0, format!("Scarico il modello… {:.0}%", a as f64 * 100.0 / b as f64));
++                    }
++                    true
++                })
++                .map_err(|e| e.to_string())?;
++            }
++            progress(0.0, "Carico il modello…".into());
++            filmcraft_speech::load(&dir, &job.model).map_err(|e| e.to_string())?
++        }
++    };
++    let opts = filmcraft_speech::Options { language: job.language.clone(), diarize: false, ..Default::default() };
++    let sr = filmcraft_speech::SAMPLE_RATE as i64;
++    let total: f64 = job.items.iter().flat_map(|(_, _, r)| r.iter()).map(|(a, b)| (b.0 - a.0) as f64).sum::<f64>().max(1.0);
++    let mut done = 0.0f64;
++    let mut out = Vec::new();
++    for (item, src, ranges) in job.items {
++        let mut words = Vec::new();
++        let mut lang = job.language.clone().unwrap_or_else(|| "it".into());
++        for (a, b) in ranges {
++            // a pezzi da ~2 minuti: meno memoria e avanzamento più fluido
++            let step = Tick::from_seconds_f64(120.0);
++            let mut c = a;
++            while c < b {
++                let e = (c + step).min(b);
++                let start = c.to_units_floor(sr).max(0);
++                let len = (e - c).to_units_floor(sr).max(0) as usize;
++                if len > sr as usize / 4 {
++                    let buf = src.audio(start, len, filmcraft_speech::SAMPLE_RATE).map_err(|e| e.to_string())?;
++                    let mono = filmcraft_speech::downmix(&buf.channels);
++                    let base = done;
++                    let span = (e.0 - c.0) as f64;
++                    let mut pf = |f: f32, _m: &str| {
++                        progress(((base + span * f as f64) / total) as f32, format!("Trascrivo… {:.0}%", (base + span * f as f64) / total * 100.0));
++                        true
++                    };
++                    let tr = t.transcribe(&mono, &opts, &mut pf).map_err(|e| e.to_string())?;
++                    lang = tr.language.clone();
++                    for mut w in tr.words {
++                        w.start = w.start + c;
++                        w.end = w.end + c;
++                        words.push(w);
++                    }
++                }
++                done += (e.0 - c.0) as f64;
++                progress((done / total) as f32, format!("Trascrivo… {:.0}%", done / total * 100.0));
++                c = e;
++            }
++        }
++        let mut tr = filmcraft_project::Transcript { language: lang, source: t.id(), speakers: Vec::new(), words };
++        tr.normalize();
++        out.push((item, tr));
++    }
++    Ok(out)
++}
++
++/// Salva le trascrizioni fatte in background (una modifica annullabile).
++pub fn apply_transcripts(s: &mut Session, done: Vec<(filmcraft_project::ItemId, filmcraft_project::Transcript)>) -> Result<()> {
++    s.edit("Trascrizione Jarvis", move |pr, _| {
++        for (i, t) in done {
++            pr.transcripts.insert(i, std::sync::Arc::new(t));
++        }
++        Ok(())
++    })
 +}
 diff --git a/crates/engine/src/lib.rs b/crates/engine/src/lib.rs
 index cead3c7..3d04cce 100644
@@ -933,7 +1270,7 @@ index abfbd93..3dea546 100644
      }
  }
 diff --git a/crates/interchange/src/timeline_model.rs b/crates/interchange/src/timeline_model.rs
-index 0a57a1a..b9de096 100644
+index 0a57a1a..172cbe8 100644
 --- a/crates/interchange/src/timeline_model.rs
 +++ b/crates/interchange/src/timeline_model.rs
 @@ -564,6 +564,11 @@ fn from_project(project: &shared::Project) -> Result<film::Project, serde_json::
@@ -948,6 +1285,33 @@ index 0a57a1a..b9de096 100644
              shared::ItemKind::Media(m) => film::ItemKind::Media(Box::new(from_media(m, &item.ext)?)),
              shared::ItemKind::Sequence(seq) => film::ItemKind::Sequence(std::sync::Arc::new(from_sequence(seq, &item.ext, &mut builder)?)),
              shared::ItemKind::Subclip { parent, range } => film::ItemKind::Subclip { parent: film::ItemId(parent.0), range: *range, restrict_trims: false },
+@@ -587,6 +592,26 @@ fn from_project(project: &shared::Project) -> Result<film::Project, serde_json::
+         out.items.insert(out_item.id, out_item);
+     }
+     out.next_id = out.next_id.max(builder.p.next_id);
++    // Jarvis: il livello di regolazione va nella cartella della sequenza che lo usa
++    let adj: Vec<film::ItemId> = out.items.iter().filter(|(_, i)| matches!(i.kind, film::ItemKind::AdjustmentLayer { .. }) && i.name != "Adjustment Layer").map(|(id, _)| *id).collect();
++    fn bin_with_sequence(b: &film::Bin, items: &std::collections::BTreeMap<film::ItemId, film::ProjectItem>) -> Option<film::BinId> {
++        for c in &b.children {
++            if let film::BinEntry::Bin(sub) = c {
++                if sub.children.iter().any(|e| matches!(e, film::BinEntry::Item(i) if items.get(i).is_some_and(|it| matches!(it.kind, film::ItemKind::Sequence(_))))) {
++                    return Some(sub.id);
++                }
++                if let Some(x) = bin_with_sequence(sub, items) {
++                    return Some(x);
++                }
++            }
++        }
++        None
++    }
++    if !adj.is_empty() {
++        if let Some(bin) = bin_with_sequence(&out.root, &out.items) {
++            out.move_to_bin(&adj, Some(bin));
++        }
++    }
+     Ok(out)
+ }
+ 
 diff --git a/crates/ui-egui/src/app.rs b/crates/ui-egui/src/app.rs
 index 250a7e2..392f4cf 100644
 --- a/crates/ui-egui/src/app.rs
@@ -986,10 +1350,10 @@ index fd5f66c..fc6ef4d 100644
  	Add Guide…	Aggiungi guida…
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..3f7fae8
+index 0000000..8be74a1
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
-@@ -0,0 +1,238 @@
+@@ -0,0 +1,463 @@
 +//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
 +
 +use serde_json::{Value, json};
@@ -1017,6 +1381,22 @@ index 0000000..3f7fae8
 +    msg: String,
 +    /// comando da eseguire al prossimo frame (così il messaggio "attendi" si vede prima)
 +    pending: Option<(String, Value, bool)>,
++    sfx: bool,
++    sfx_gain: f32,
++    /// trascrizione in corso in background
++    cap: Option<CapRun>,
++    /// aggiornamento: controllo fatto, versione nuova (tag, url), scartato
++    upd_checked: bool,
++    upd: std::sync::Arc<std::sync::Mutex<Option<(String, String)>>>,
++    upd_dismissed: bool,
++}
++
++type CapResult = Result<Vec<(filmcraft_project::ItemId, filmcraft_project::Transcript)>, String>;
++
++struct CapRun {
++    handle: std::thread::JoinHandle<CapResult>,
++    prog: std::sync::Arc<std::sync::Mutex<(f32, String)>>,
++    params: Value,
 +}
 +
 +impl Default for State {
@@ -1039,6 +1419,12 @@ index 0000000..3f7fae8
 +            font_ok: None,
 +            msg: String::new(),
 +            pending: None,
++            sfx: true,
++            sfx_gain: -3.0,
++            cap: None,
++            upd_checked: false,
++            upd: Default::default(),
++            upd_dismissed: false,
 +        }
 +    }
 +}
@@ -1050,6 +1436,8 @@ index 0000000..3f7fae8
 +}
 +
 +pub(crate) fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
++    update_banner(app, ctx);
++    poll_captions(app, ctx);
 +    // esegue il comando in attesa (al secondo frame, dopo aver mostrato "attendi")
 +    if let Some((cmd, p, armed)) = app.jarvis_ui.pending.take() {
 +        if armed {
@@ -1119,7 +1507,11 @@ index 0000000..3f7fae8
 +                ui.checkbox(&mut st.precise, "Trascrizione precisa");
 +                ui.checkbox(&mut st.retranscribe, "Ritrascrivi");
 +            });
-+            if ui.add_sized([ui.available_width(), 30.0], egui::Button::new("✨ Crea sottotitoli")).clicked() {
++            if let Some(c) = &st.cap {
++                let (f, m) = c.prog.lock().map(|g| g.clone()).unwrap_or((0.0, String::new()));
++                ui.add(egui::ProgressBar::new(f.clamp(0.0, 1.0)).text(m).desired_width(ui.available_width()));
++                ui.small("Puoi continuare a lavorare: i sottotitoli arrivano da soli quando ha finito.");
++            } else if ui.add_sized([ui.available_width(), 30.0], egui::Button::new("✨ Crea sottotitoli")).clicked() {
 +                let mut p = json!({
 +                    "style": STYLES[st.style.min(STYLES.len() - 1)].id, "upper": st.upper, "pop": st.pop, "censor": st.censor,
 +                    "size": st.size, "model": if st.precise { "whisper-small" } else { "whisper-base" }, "language": "it",
@@ -1131,11 +1523,7 @@ index 0000000..3f7fae8
 +                if st.y > 0.0 {
 +                    p["y"] = json!(st.y / 100.0);
 +                }
-+                run = Some((
-+                    "jarvis.autoCaptions".into(),
-+                    p,
-+                    "⏳ Trascrivo e creo i sottotitoli… (la prima volta scarica il modello: FilmCraft resta fermo qualche minuto)".into(),
-+                ));
++                run = Some(("jarvis.captionsBg".into(), p, String::new()));
 +            }
 +            ui.small("Finiscono sulla traccia \"Sottotitoli Jarvis\": ogni pezzo si modifica come un testo normale.");
 +            ui.separator();
@@ -1150,6 +1538,13 @@ index 0000000..3f7fae8
 +                    ui.selectable_value(&mut st.scope, i, *n);
 +                }
 +            });
++            ui.horizontal(|ui| {
++                ui.checkbox(&mut st.sfx, "🔊 Suono (swoosh)");
++                ui.add_enabled(st.sfx, egui::Slider::new(&mut st.sfx_gain, -24.0..=6.0).suffix(" dB"));
++            });
++            if filmcraft_engine::jarvis::sfx_library().is_empty() {
++                ui.small("Nessun suono trovato: metti dei .wav in %LOCALAPPDATA%\\FilmCraftJarvis\\sfx (o installa Premiere Composer).");
++            }
 +            ui.label(egui::RichText::new("Stile Composer (keyframe + motion blur)").strong());
 +            ui.horizontal(|ui| {
 +                ui.label("Durata per lato");
@@ -1158,7 +1553,7 @@ index 0000000..3f7fae8
 +            egui::Grid::new("jarvis_comp").num_columns(3).spacing([6.0, 6.0]).show(ui, |ui| {
 +                for (k, (id, name)) in COMPOSER.iter().enumerate() {
 +                    if ui.add_sized([108.0, 26.0], egui::Button::new(*name)).clicked() {
-+                        run = Some(("jarvis.composer".into(), json!({"preset": id, "scope": SCOPES[st.scope].0, "frames": st.frames}), String::new()));
++                        run = Some(("jarvis.composer".into(), json!({"preset": id, "scope": SCOPES[st.scope].0, "frames": st.frames, "sfx": st.sfx, "sfxGain": st.sfx_gain}), String::new()));
 +                    }
 +                    if k % 3 == 2 {
 +                        ui.end_row();
@@ -1171,7 +1566,7 @@ index 0000000..3f7fae8
 +                let mut k = 0;
 +                for tp in TRANSITIONS.iter().map(|t| (t.id, t.name)).chain(std::iter::once(("mix", "🎲 Mix casuale"))) {
 +                    if ui.add_sized([108.0, 26.0], egui::Button::new(tp.1)).clicked() {
-+                        run = Some(("jarvis.transition".into(), json!({"preset": tp.0, "scope": SCOPES[st.scope].0}), String::new()));
++                        run = Some(("jarvis.transition".into(), json!({"preset": tp.0, "scope": SCOPES[st.scope].0, "sfx": st.sfx, "sfxGain": st.sfx_gain}), String::new()));
 +                    }
 +                    k += 1;
 +                    if k % 3 == 0 {
@@ -1189,7 +1584,7 @@ index 0000000..3f7fae8
 +            ui.horizontal_wrapped(|ui| {
 +                for (id, name) in CLIP_FX {
 +                    if ui.button(*name).clicked() {
-+                        run = Some(("jarvis.clipFx".into(), json!({"preset": id, "amount": st.amount}), String::new()));
++                        run = Some(("jarvis.clipFx".into(), json!({"preset": id, "amount": st.amount, "sfx": st.sfx, "sfxGain": st.sfx_gain}), String::new()));
 +                    }
 +                }
 +            });
@@ -1204,6 +1599,11 @@ index 0000000..3f7fae8
 +    }
 +    if follow != follow_before {
 +        let _ = crate::menus::invoke(app, ctx, "sequence.selectionFollowsPlayhead", json!({"on": follow}));
++    }
++    if let Some((cmd, p, _)) = run.as_ref().filter(|(c, _, _)| c == "jarvis.captionsBg") {
++        start_captions(app, ctx, p.clone());
++        let _ = cmd;
++        run = None;
 +    }
 +    if let Some((cmd, p, wait)) = run {
 +        if wait.is_empty() {
@@ -1223,9 +1623,198 @@ index 0000000..3f7fae8
 +fn done_msg(cmd: &str, v: &Value) -> String {
 +    match cmd {
 +        "jarvis.autoCaptions" => format!("✅ Creati {} pezzi di sottotitoli", v["captions"].as_u64().unwrap_or(0)),
-+        "jarvis.transition" => format!("✅ Transizioni messe: {}", v["transitions"].as_u64().unwrap_or(0)),
++        "jarvis.transition" | "jarvis.composer" => format!("✅ Transizioni messe: {} · suoni: {}", v["transitions"].as_u64().unwrap_or(0), v["sfx"].as_u64().unwrap_or(0)),
 +        "jarvis.clipFx" => format!("✅ Effetto applicato a {} clip", v["clips"].as_u64().unwrap_or(0)),
 +        _ => "✅ Fatto".into(),
++    }
++}
++
++
++// ---------------------------------------------------------------- sottotitoli in background
++
++fn start_captions(app: &mut FilmcraftApp, ctx: &egui::Context, p: Value) {
++    match filmcraft_engine::jarvis::prepare_captions(&app.session, &p) {
++        Ok(None) => {
++            let r = crate::menus::invoke(app, ctx, "jarvis.autoCaptions", p);
++            app.jarvis_ui.msg = match r {
++                Ok(v) => done_msg("jarvis.autoCaptions", &v),
++                Err(e) => format!("⚠ {e}"),
++            };
++        }
++        Ok(Some(job)) => {
++            let prog = std::sync::Arc::new(std::sync::Mutex::new((0.0f32, "Preparo l'audio…".to_string())));
++            let pr2 = prog.clone();
++            let c2 = ctx.clone();
++            let handle = std::thread::spawn(move || {
++                let cb = move |f: f32, m: String| {
++                    if let Ok(mut g) = pr2.lock() {
++                        *g = (f, m);
++                    }
++                    c2.request_repaint();
++                };
++                filmcraft_engine::jarvis::run_captions(job, &cb)
++            });
++            app.jarvis_ui.msg.clear();
++            app.jarvis_ui.cap = Some(CapRun { handle, prog, params: p });
++        }
++        Err(e) => app.jarvis_ui.msg = format!("⚠ {e}"),
++    }
++}
++
++fn poll_captions(app: &mut FilmcraftApp, ctx: &egui::Context) {
++    let finished = app.jarvis_ui.cap.as_ref().is_some_and(|c| c.handle.is_finished());
++    if !finished {
++        if app.jarvis_ui.cap.is_some() {
++            ctx.request_repaint_after(std::time::Duration::from_millis(300));
++        }
++        return;
++    }
++    let Some(run) = app.jarvis_ui.cap.take() else { return };
++    let res = run.handle.join().unwrap_or_else(|_| Err("la trascrizione si è interrotta".into()));
++    match res {
++        Ok(done) => {
++            if let Err(e) = filmcraft_engine::jarvis::apply_transcripts(&mut app.session, done) {
++                app.jarvis_ui.msg = format!("⚠ {e}");
++                return;
++            }
++            let mut p = run.params;
++            p["retranscribe"] = json!(false);
++            let r = crate::menus::invoke(app, ctx, "jarvis.autoCaptions", p);
++            app.jarvis_ui.msg = match r {
++                Ok(v) => done_msg("jarvis.autoCaptions", &v),
++                Err(e) => format!("⚠ {e}"),
++            };
++        }
++        Err(e) => app.jarvis_ui.msg = format!("⚠ {e}"),
++    }
++}
++
++// ---------------------------------------------------------------- aggiornamento di FilmCraft Jarvis
++
++const REPO: &str = "entonicorez-jpg/JarvisClipper";
++
++fn exe_dir() -> Option<std::path::PathBuf> {
++    std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf()))
++}
++
++fn current_tag() -> Option<String> {
++    let d = exe_dir()?;
++    for f in [d.join("jarvis_tag.txt"), d.parent()?.join("jarvis_tag.txt")] {
++        if let Ok(t) = std::fs::read_to_string(&f) {
++            let t = t.trim().to_string();
++            if !t.is_empty() {
++                return Some(t);
++            }
++        }
++    }
++    None
++}
++
++#[cfg(windows)]
++fn hidden(cmd: &mut std::process::Command) {
++    use std::os::windows::process::CommandExt;
++    cmd.creation_flags(0x0800_0000);
++}
++#[cfg(not(windows))]
++fn hidden(_: &mut std::process::Command) {}
++
++fn check_update(slot: std::sync::Arc<std::sync::Mutex<Option<(String, String)>>>, ctx: egui::Context) {
++    let Some(cur) = current_tag() else { return };
++    let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=100");
++    let mut cmd = std::process::Command::new("powershell");
++    cmd.args(["-NoProfile", "-Command", &format!("[Net.ServicePointManager]::SecurityProtocol='Tls12'; (Invoke-WebRequest -UseBasicParsing -Headers @{{'User-Agent'='FilmCraftJarvis'}} '{url}').Content")]);
++    hidden(&mut cmd);
++    let Ok(out) = cmd.output() else { return };
++    let Ok(v) = serde_json::from_slice::<Value>(&out.stdout) else { return };
++    let best = v
++        .as_array()
++        .into_iter()
++        .flatten()
++        .filter(|r| r["tag_name"].as_str().is_some_and(|t| t.starts_with("filmcraft-jarvis-")) && !r["draft"].as_bool().unwrap_or(false))
++        .max_by(|a, b| a["published_at"].as_str().unwrap_or("").cmp(b["published_at"].as_str().unwrap_or("")));
++    let Some(r) = best else { return };
++    let tag = r["tag_name"].as_str().unwrap_or("").to_string();
++    let asset = r["assets"].as_array().into_iter().flatten().find(|a| a["name"].as_str().is_some_and(|n| n.ends_with(".zip")));
++    if let (false, Some(a)) = (tag == cur, asset) {
++        if let (Ok(mut g), Some(u)) = (slot.lock(), a["browser_download_url"].as_str()) {
++            *g = Some((tag, u.to_string()));
++        }
++        ctx.request_repaint();
++    }
++}
++
++fn start_update(tag: &str, url: &str) -> Result<(), String> {
++    let dest = exe_dir().ok_or("cartella del programma sconosciuta")?;
++    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
++    let script = std::env::temp_dir().join("filmcraft_jarvis_update.ps1");
++    let body = r#"param($url, $tag, $dest, $procId, $exe)
++try { Wait-Process -Id $procId -Timeout 600 -ErrorAction SilentlyContinue } catch {}
++[Net.ServicePointManager]::SecurityProtocol = 'Tls12'
++$zip = Join-Path $env:TEMP 'FilmCraftJarvis_update.zip'
++Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip
++$tmp = Join-Path $env:TEMP 'FilmCraftJarvis_update'
++Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
++Expand-Archive -Path $zip -DestinationPath $tmp -Force
++$inner = Get-ChildItem $tmp -Directory | Select-Object -First 1
++$src = if ($inner) { $inner.FullName } else { $tmp }
++Remove-Item (Join-Path $src 'portable.txt') -ErrorAction SilentlyContinue
++for ($i = 0; $i -lt 20; $i++) { try { Copy-Item -Path (Join-Path $src '*') -Destination $dest -Recurse -Force -ErrorAction Stop; break } catch { Start-Sleep -Seconds 1 } }
++Set-Content -Path (Join-Path $dest 'jarvis_tag.txt') -Value $tag
++$parent = Split-Path $dest -Parent
++if ((Split-Path $parent -Leaf) -eq 'FilmCraftJarvis') { Set-Content -Path (Join-Path $parent 'jarvis_tag.txt') -Value $tag }
++Remove-Item $zip -ErrorAction SilentlyContinue
++Start-Process -FilePath $exe
++"#;
++    std::fs::write(&script, body).map_err(|e| e.to_string())?;
++    let mut cmd = std::process::Command::new("powershell");
++    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
++        .arg(&script)
++        .args(["-url", url, "-tag", tag, "-dest"])
++        .arg(&dest)
++        .args(["-procId", &std::process::id().to_string(), "-exe"])
++        .arg(&exe);
++    hidden(&mut cmd);
++    cmd.spawn().map_err(|e| e.to_string())?;
++    Ok(())
++}
++
++fn update_banner(app: &mut FilmcraftApp, ctx: &egui::Context) {
++    let st = &mut app.jarvis_ui;
++    if !st.upd_checked {
++        st.upd_checked = true;
++        if cfg!(windows) {
++            let slot = st.upd.clone();
++            let c = ctx.clone();
++            std::thread::spawn(move || check_update(slot, c));
++        }
++    }
++    if st.upd_dismissed {
++        return;
++    }
++    let Some((tag, url)) = st.upd.lock().ok().and_then(|g| g.clone()) else { return };
++    let mut close = false;
++    egui::Area::new(egui::Id::new("jarvis_update_banner"))
++        .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 44.0))
++        .order(egui::Order::Foreground)
++        .show(ctx, |ui| {
++            egui::Frame::popup(ui.style()).fill(egui::Color32::from_rgb(76, 46, 140)).show(ui, |ui| {
++                ui.horizontal(|ui| {
++                    ui.label(egui::RichText::new("🦉 C'è una nuova versione di FilmCraft Jarvis").color(egui::Color32::WHITE).strong());
++                    if ui.button("⬇ Aggiorna").clicked() {
++                        match start_update(&tag, &url) {
++                            Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
++                            Err(e) => app.jarvis_ui.msg = format!("⚠ Aggiornamento: {e}"),
++                        }
++                    }
++                    if ui.button("Dopo").clicked() {
++                        close = true;
++                    }
++                });
++                ui.small(egui::RichText::new("FilmCraft si chiude (salva prima!), si aggiorna e si riapre da solo.").color(egui::Color32::from_gray(225)));
++            });
++        });
++    if close {
++        app.jarvis_ui.upd_dismissed = true;
 +    }
 +}
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs

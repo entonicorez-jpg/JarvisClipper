@@ -259,6 +259,27 @@ def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=
         return (f"<link><linkclipref>{cid}</linkclipref><mediatype>{media}</mediatype>"
                 f"<trackindex>{track}</trackindex><clipindex>{idx + 1}</clipindex></link>")
 
+    # swoosh sugli zoom che entrano animati
+    swooshes = []
+    if ed.get("sfx", True):
+        from . import sfx as _sfx
+        starts = [z["start"] for z in adj if z.get("anim")] if flavor == "filmcraft" else [s0 for s0, s1, kind, a, b in fxclips if kind == "in"]
+        for k, st in enumerate(starts):
+            f = _sfx.pick("swoosh" if k % 3 else "transition", k)
+            if f:
+                swooshes.append((max(0, st - F(0.08)), f))
+    sfiles = {}
+    for _, f in swooshes:
+        if f not in sfiles:
+            from . import sfx as _sfx
+            sfiles[f] = (f"sfx{len(sfiles)}", max(1, F(_sfx.duration(f))))
+
+    def sfx_def(f):
+        fid, d = sfiles[f]
+        return (f'<file id="{fid}"><name>{escape(os.path.basename(f))}</name><pathurl>{escape(path_url(f))}</pathurl>{rate}'
+                f"<duration>{d}</duration><media><audio><samplecharacteristics><depth>16</depth><samplerate>48000</samplerate>"
+                f"</samplecharacteristics><channelcount>2</channelcount></audio></media></file>")
+
     labels = {1: "ZOOM CAM", 2: "CAM PIENA"}
     x = ['<?xml version="1.0" encoding="UTF-8"?>', "<!DOCTYPE xmeml>", '<xmeml version="4">']
     if folder:
@@ -267,6 +288,9 @@ def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=
         x.append(f'<clip id="mc_src"><name>{escape(src_name)}</name><duration>{src_frames}</duration>{rate}'
                  f'<media><video><track><clipitem id="mci_src"><name>{escape(src_name)}</name>'
                  + file_el("src", src, src_name, src_frames) + "</clipitem></track></video></media></clip>")
+        for f, (fid, d) in sfiles.items():
+            x.append(f'<clip id="mc_{fid}"><name>{escape(os.path.basename(f))}</name><duration>{d}</duration>{rate}<media><audio><track>'
+                     f'<clipitem id="mci_{fid}"><name>{escape(os.path.basename(f))}</name>' + sfx_def(f) + "</clipitem></track></audio></media></clip>")
         if beeps and bip:
             x.append(f'<clip id="mc_bip"><name>censura.wav</name><duration>{F(3.0)}</duration>{rate}<media><audio><track>'
                      f'<clipitem id="mci_bip"><name>censura.wav</name><file id="bip"><name>censura.wav</name>'
@@ -334,6 +358,17 @@ def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=
                   f"<media><audio><samplecharacteristics><depth>16</depth><samplerate>48000</samplerate></samplecharacteristics>"
                   f"<channelcount>2</channelcount></audio></media></file>") if (k == 0 and not folder) else '<file id="bip"/>'
             x.append(f'<clipitem id="bp{k}"><name>CENSURA</name><enabled>TRUE</enabled><duration>{bfr}</duration>{rate}'
+                     f"<start>{st}</start><end>{st + ln}</end><in>0</in><out>{ln}</out>{fe}"
+                     "<sourcetrack><mediatype>audio</mediatype><trackindex>1</trackindex></sourcetrack></clipitem>")
+        x.append("</track>")
+    if swooshes:
+        x.append("<track>")
+        used = set()
+        for k, (st, f) in enumerate(swooshes):
+            fid, ln = sfiles[f]
+            fe = f'<file id="{fid}"/>' if (folder or fid in used) else sfx_def(f)
+            used.add(fid)
+            x.append(f'<clipitem id="sw{k}"><name>{escape(os.path.basename(f))}</name><enabled>TRUE</enabled><duration>{ln}</duration>{rate}'
                      f"<start>{st}</start><end>{st + ln}</end><in>0</in><out>{ln}</out>{fe}"
                      "<sourcetrack><mediatype>audio</mediatype><trackindex>1</trackindex></sourcetrack></clipitem>")
         x.append("</track>")
