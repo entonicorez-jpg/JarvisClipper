@@ -51,6 +51,9 @@ def run(out_path):
     from core import words as W
     step("filtro parole", lambda: (W.censor_ranges([{"w": "cazzo", "s": 1, "e": 1.4}, {"w": "porco", "s": 2, "e": 2.3}, {"w": "dio", "s": 2.3, "e": 2.6}]),
                                     W.find_spam([{"s": 0, "e": 2, "text": "fate tap tap ragazzi"}]))[0].__len__())
+    from core import cutroom
+    step("CUTROOM: parte del VOD con censura", lambda: media.probe(cutroom.make_part(vid, info, dict(ed, censor=[{"s": 12, "e": 12.5, "w": "x", "on": True}]), os.path.join(d, "cr.mp4")))["dur"])
+    step("CUTROOM: stato", lambda: cutroom.status()["installed"] in (True, False))
     step("rilevamento voce (VAD)", lambda: len(autoedit.speech_segments(vid, 0, 20, "jumpcut")))
     from core import updater
     step("versione inclusa", lambda: updater.current_version() if updater.current_version() != "dev" else (_ for _ in ()).throw(RuntimeError("version.txt mancante")))

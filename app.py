@@ -7,7 +7,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory, abort
 FROZEN = getattr(sys, "frozen", False)
 BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))  # file dell'app (sola lettura)
 sys.path.insert(0, BASE)
-from core import media, analyze, render, premiere, gpu, autoedit, updater, layout as lay  # noqa: E402
+from core import media, analyze, render, premiere, gpu, autoedit, updater, cutroom, layout as lay  # noqa: E402
 
 # dati scrivibili: accanto allo script, oppure in %LOCALAPPDATA%\JarvisClipper se è l'app installata
 DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "JarvisClipper") if FROZEN else BASE
@@ -18,7 +18,7 @@ USER_DIR = os.path.join(os.path.expanduser("~"), "Videos", "JarvisClipper")
 os.makedirs(PROJ_DIR, exist_ok=True)
 os.makedirs(USER_DIR, exist_ok=True)
 
-DEFAULT_CFG = {"api_key": "", "ai_model": "claude-sonnet-5-5", "model": "small", "max_clips": 15,
+DEFAULT_CFG = {"cutroom_url": "http://127.0.0.1:8765", "api_key": "", "ai_model": "claude-sonnet-5-5", "model": "small", "max_clips": 15,
                "split": 0.4, "min_len": 15, "max_len": 59, "pre": 14, "post": 8, "lang": "it"}
 
 app = Flask(__name__, static_folder=os.path.join(BASE, "static"))
@@ -400,7 +400,35 @@ def job_edit_export(pid, premiere_xml, mp4):
         pass
 
 
+def job_edit_cutroom(pid):
+    p = load(pid); ed = p["edit"]; base = cfg()["cutroom_url"]
+    cutroom.start(base, progress=lambda m: set_job(pid, msg=m))
+    name = re.sub(r'[\\/:*?"<>|]+', "", p.get("name", "Jarvis"))[:80]
+    r = cutroom.send(p["src_path"], p["info"], p.get("edit_cam"), ed, f"{name} (Jarvis)", base,
+                     lambda f, m: set_job(pid, progress=f, msg=m), lambda m: set_job(pid, log=m), lambda: stopped(pid))
+    update(pid, last_cutroom=r)
+    set_job(pid, msg="Aperto in CUTROOM: è il primo progetto della lista", log=f"CUTROOM: {r['tagli']} tagli, {r['zoom']} zoom")
+    webbrowser.open(r["url"])
+
+
 # ------------------------------------------------------------------ API
+@app.route("/api/project/<pid>/edit/cutroom", methods=["POST"])
+def api_edit_cutroom(pid):
+    return jsonify({"ok": start_job(pid, "edit_cutroom", lambda: job_edit_cutroom(pid))})
+
+
+@app.route("/api/cutroom", methods=["GET", "POST"])
+def api_cutroom():
+    if request.method == "POST":
+        what = (request.json or {}).get("do")
+        if what == "install" and not cutroom.STATE["running"]:
+            cutroom.STATE["running"] = True
+            threading.Thread(target=cutroom.install, daemon=True).start()
+        elif what == "start":
+            threading.Thread(target=lambda: cutroom.start(cfg()["cutroom_url"], wait=1), daemon=True).start()
+    return jsonify(cutroom.status(cfg()["cutroom_url"]))
+
+
 @app.route("/api/project/<pid>/range", methods=["POST"])
 def api_range(pid):
     d = request.json or {}
