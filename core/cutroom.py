@@ -83,18 +83,78 @@ class Client:
         return p.get("revision", revision + 1)
 
 
-def make_part(path, info, ed, out, progress=lambda f: None):
-    """La parte scelta come file a sé: video copiato (veloce), audio con il suono di censura già applicato."""
-    rs, re_ = ed["range"]
+def censored_audio(path, start, length, ranges, out_wav, chunk=300.0, progress=lambda f: None, stop=lambda: False):
+    """Audio del tratto [start, start+length] con il suono di censura, a blocchi di 5 minuti
+    (con decine di parolacce un unico filtro ffmpeg esaurisce la memoria). ranges in tempi locali."""
+    tmp = tempfile.mkdtemp(prefix="jarvis_aud_")
+    parts, t, i = [], 0.0, 0
+    while t < length - 0.01:
+        if stop():
+            raise RuntimeError("Annullato")
+        d = min(chunk, length - t)
+        loc = [dict(c, s=c["s"] - t, e=c["e"] - t) for c in ranges if c["e"] > t and c["s"] < t + d]
+        extra_in, afilt, amap = autoedit.bleep_args(loc, 0.0, d, False)
+        fp = os.path.join(tmp, f"{i:04d}.wav")
+        r = media.run(["-y", "-hide_banner", "-loglevel", "error", "-ss", f"{start + t:.3f}", "-t", f"{d:.3f}", "-i", path]
+                      + extra_in + amap + afilt + ["-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", fp])
+        if r.returncode != 0 or not os.path.exists(fp):
+            raise CutroomError("Non riesco a preparare l'audio: " + r.stderr[-300:])
+        parts.append(fp); t += d; i += 1
+        progress(t / length)
+    lst = os.path.join(tmp, "list.txt")
+    with open(lst, "w", encoding="utf-8") as f:
+        for p in parts:
+            f.write(f"file '{p.replace(chr(92), '/')}'\n")
+    r = media.run(["-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", out_wav])
+    for p in parts:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    if r.returncode != 0:
+        raise CutroomError("Non riesco a unire l'audio: " + r.stderr[-300:])
+    return out_wav
+
+
+def keyframe_before(path, t):
+    """Tempo esatto dell'ultimo fotogramma chiave <= t (la copia senza ricodifica può partire solo da lì)."""
+    import re as _re
+    if t <= 0.05:
+        return 0.0
+    a = max(0.0, t - 12.0)
+    r = media.run(["-hide_banner", "-copyts", "-skip_frame", "nokey", "-ss", f"{a:.3f}", "-i", path, "-t", "13",
+                   "-an", "-vf", "showinfo", "-f", "null", "-"])
+    kfs = [float(m) for m in _re.findall(r"pts_time:([\d.]+)", r.stderr)]
+    before = [k for k in kfs if k <= t + 0.001]
+    return max(before) if before else a
+
+
+def make_part(path, info, ed, out, progress=lambda f: None, stop=lambda: False):
+    """La parte scelta come file a sé, dal fotogramma chiave appena prima dell'inizio: video copiato (veloce),
+    audio con il suono di censura già applicato. Ritorna il tempo del VOD da cui parte il file."""
+    rs = keyframe_before(path, ed["range"][0])
+    re_ = ed["range"][1]
+    length = re_ - rs
     cens = [dict(c, s=c["s"] - rs, e=c["e"] - rs) for c in (ed.get("censor") or []) if c.get("on", True)]
-    extra_in, afilt, amap = autoedit.bleep_args(cens, 0.0, re_ - rs, False)
-    args = ["-y", "-hide_banner", "-loglevel", "error", "-ss", f"{rs:.3f}", "-t", f"{re_ - rs:.3f}", "-i", path] + extra_in
-    args += ["-map", "0:v:0"] + amap + afilt + ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                                                 "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", out]
+    base = ["-y", "-hide_banner", "-loglevel", "error", "-ss", f"{rs:.3f}", "-t", f"{length:.3f}", "-i", path]
+    if cens:
+        wav = out + ".audio.wav"
+        censored_audio(path, rs, length, cens, wav, progress=lambda f: progress(0.8 * f), stop=stop)
+        args = base + ["-i", wav, "-map", "0:v:0", "-map", "1:a:0"]
+    else:
+        wav = None
+        args = base + ["-map", "0:v:0", "-map", "0:a:0?"]
+    args += ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", "-avoid_negative_ts", "make_zero",
+             "-movflags", "+faststart", out]
     r = media.run(args)
+    if wav:
+        try:
+            os.remove(wav)
+        except OSError:
+            pass
     if r.returncode != 0 or not os.path.exists(out):
         raise CutroomError("Non riesco a preparare il video per CUTROOM: " + r.stderr[-300:])
-    return out
+    return rs
 
 
 def send(path, info, cam, ed, name, base="http://127.0.0.1:8765", progress=lambda f, m: None, log=print, stop=lambda: False):
@@ -106,7 +166,8 @@ def send(path, info, cam, ed, name, base="http://127.0.0.1:8765", progress=lambd
 
     progress(0.02, "Preparo la parte del VOD per CUTROOM…")
     part = os.path.join(tempfile.mkdtemp(prefix="jarvis_cutroom_"), (name[:60] or "jarvis") + ".mp4")
-    make_part(path, info, ed, part)
+    rs = make_part(path, info, ed, part, lambda f: progress(0.02 + 0.03 * f, "Preparo l'audio con la censura…"), stop)
+    length = re_ - rs  # da qui i tempi sono relativi all'inizio del file caricato
 
     proj = c.create(name)
     pid = proj["id"]
