@@ -295,7 +295,9 @@ def build_pieces(keep, zooms):
             if x1 - x0 < 0.04:
                 continue
             mid = (x0 + x1) / 2
-            zi = next((i for i, z in enumerate(zs) if z["s"] <= mid < z["e"]), -1)
+            # come la preview: vince il primo zoom nell'ordine dell'editor che copre quel punto
+            hit = next((z for z in zooms if z["s"] <= mid < z["e"]), None)
+            zi = next((i for i, z in enumerate(zs) if z is hit), -1)
             pieces.append([x0, x1, zs[zi]["lv"] if zi >= 0 else 0, zi])
     out = []
     for k, (a, b, lv, zi) in enumerate(pieces):
