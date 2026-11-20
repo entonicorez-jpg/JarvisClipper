@@ -38,6 +38,12 @@ def run(out_path):
     step("anteprima", lambda: render.render(vid, info, L, clips[0]["start"], clips[0]["end"], os.path.join(d, "p.mp4"), preview=True))
     step("render 1080x1920", lambda: render.render(vid, info, L, clips[0]["start"], clips[0]["end"], os.path.join(d, "f.mp4")))
     step("xml premiere", lambda: premiere.build_xml(clips, vid, info, L, {clips[0]["id"]: os.path.join(d, "f.mp4")}, os.path.join(d, "x.xml")))
+    from core import autoedit
+    cam = {"x": 900, "y": 400, "w": 360, "h": 270}
+    pl = {}
+    step("montaggio: piano", lambda: pl.update(autoedit.plan(vid, info, cam, {"ritmo": "normale"}, log=lambda m: None)) or pl["report"])
+    step("montaggio: xml", lambda: premiere.build_autoedit_xml(pl, vid, info, cam, os.path.join(d, "ae.xml")))
+    step("montaggio: mp4", lambda: media.probe(autoedit.render(vid, info, cam, pl, os.path.join(d, "ae.mp4")))["dur"])
     step("autocam (opencv)", lambda: layout.auto_cam([], info))
     for mod in ("yt_dlp", "curl_cffi", "cv2", "webview", "faster_whisper", "ctranslate2", "flask"):
         step("import " + mod, lambda m=mod: __import__(m) and None)

@@ -7,7 +7,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory, abort
 FROZEN = getattr(sys, "frozen", False)
 BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))  # file dell'app (sola lettura)
 sys.path.insert(0, BASE)
-from core import media, analyze, render, premiere, gpu, layout as lay  # noqa: E402
+from core import media, analyze, render, premiere, gpu, autoedit, layout as lay  # noqa: E402
 
 # dati scrivibili: accanto allo script, oppure in %LOCALAPPDATA%\JarvisClipper se è l'app installata
 DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "JarvisClipper") if FROZEN else BASE
@@ -293,7 +293,68 @@ def job_export(pid, ids, do_render):
         pass
 
 
+def job_autoedit(pid, opts):
+    p = load(pid)
+    cam = (p.get("layout") or {}).get("cam")
+    if not cam:
+        set_job(pid, log="Nessuna cam nel layout: faccio solo i tagli, senza zoom")
+    pl = autoedit.plan(p["src_path"], p["info"], cam, opts,
+                       lambda f, m: set_job(pid, progress=0.75 * f, msg=m),
+                       lambda m: set_job(pid, log=m), lambda: stopped(pid))
+    pl["opts"] = opts
+    d = pdir(pid)
+    name = f"ae_prev_{int(time.time()) % 10 ** 7}.mp4"
+    autoedit.render(p["src_path"], p["info"], cam, pl, os.path.join(d, name),
+                    lambda f, m: set_job(pid, progress=0.75 + 0.25 * f, msg="Preparo l'anteprima del montaggio…"),
+                    lambda: stopped(pid), limit=45, preview=True)
+    old = (load(pid).get("autoedit") or {}).get("preview")
+    if old:
+        try:
+            os.remove(os.path.join(d, old))
+        except OSError:
+            pass
+    pl["preview"] = name
+    update(pid, autoedit=pl)
+    set_job(pid, msg="Montaggio pronto: guarda l'anteprima ed esporta")
+
+
+def job_autoedit_export(pid, do_mp4):
+    p = load(pid)
+    pl = p.get("autoedit")
+    if not pl:
+        raise RuntimeError("Prima premi 'Monta il video'")
+    cam = (p.get("layout") or {}).get("cam")
+    out = p["out_dir"]; os.makedirs(out, exist_ok=True)
+    base = p.get("name", "video")[:50]
+    xml = os.path.join(out, f"{base}_MONTATO_Premiere.xml")
+    premiere.build_autoedit_xml(pl, p["src_path"], p["info"], cam, xml, name=f"{base} - Montaggio Jarvis")
+    set_job(pid, log="XML montaggio: " + xml, progress=0.02)
+    mp4 = None
+    if do_mp4:
+        mp4 = os.path.join(out, f"{base}_MONTATO.mp4")
+        autoedit.render(p["src_path"], p["info"], cam, pl, mp4,
+                        lambda f, m: set_job(pid, progress=0.02 + 0.98 * f, msg=m), lambda: stopped(pid))
+    update(pid, last_autoedit={"xml": xml, "mp4": mp4})
+    set_job(pid, msg="Montaggio esportato", log="Fatto")
+    try:
+        os.startfile(out)
+    except Exception:
+        pass
+
+
 # ------------------------------------------------------------------ API
+@app.route("/api/project/<pid>/autoedit", methods=["POST"])
+def api_autoedit(pid):
+    opts = request.json or {}
+    return jsonify({"ok": start_job(pid, "autoedit", lambda: job_autoedit(pid, opts))})
+
+
+@app.route("/api/project/<pid>/autoedit/export", methods=["POST"])
+def api_autoedit_export(pid):
+    d = request.json or {}
+    return jsonify({"ok": start_job(pid, "autoedit_export", lambda: job_autoedit_export(pid, d.get("mp4", True)))})
+
+
 @app.route("/")
 def index():
     return send_from_directory(app.static_folder, "index.html")
@@ -370,6 +431,8 @@ def api_get(pid):
     p = load(pid)
     for c in p.get("clips", []):
         c.pop("words", None)
+    if p.get("autoedit"):
+        p["autoedit"] = {k: v for k, v in p["autoedit"].items() if k != "pieces"}
     return jsonify(p)
 
 

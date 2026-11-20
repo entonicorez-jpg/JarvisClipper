@@ -171,6 +171,28 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
       </div>
     </div>
 
+    <div class="sec hidden" id="aeSec">
+      <h2><span class="n">✂</span> Montaggio automatico · video orizzontale</h2>
+      <div style="color:var(--mut);margin:-4px 0 14px">Taglia i silenzi e, quando reagisci forte, zooma sulla tua cam (riquadro <b style="color:var(--hot)">rosso</b> qui sopra). Le reazioni più forti mettono la cam quasi a tutto schermo.</div>
+      <div class="opts" style="border:0;margin:0;padding:0">
+        <label>Ritmo dei tagli <select id="aeRitmo"><option value="tranquillo">Tranquillo</option><option value="normale" selected>Normale</option><option value="veloce">Veloce</option></select></label>
+        <label>Zoom <select id="aeZoom"><option value="leggero">Leggero (118%)</option><option value="normale" selected>Normale (132%)</option><option value="forte">Forte (150%)</option></select></label>
+        <label>Quante reazioni <select id="aeSens"><option value="0.8">Solo le più forti</option><option value="1" selected>Normale</option><option value="1.25">Tante</option></select></label>
+        <label style="flex-direction:row;align-items:center;gap:8px;margin-bottom:10px"><input type="checkbox" id="aeFull" checked style="accent-color:var(--acc)"> cam a tutto schermo sulle reazioni più forti</label>
+        <div style="flex:1"></div>
+        <button class="pri" id="aeBtn" onclick="startAE()">✂️ Monta il video</button>
+      </div>
+      <div id="aeRes" class="hidden" style="display:grid;grid-template-columns:minmax(0,640px) 1fr;gap:22px;margin-top:18px;align-items:start">
+        <video id="aeVid" controls style="width:100%;aspect-ratio:16/9;background:#000;border-radius:12px"></video>
+        <div>
+          <div id="aeRep" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"></div>
+          <div style="color:var(--mut);font-size:12px;margin:12px 0">L'anteprima mostra ~45 secondi a partire dal primo zoom. Nell'XML per Premiere ogni zoom è un effetto Movimento (scala e posizione) che puoi ritoccare; le clip zoomate si chiamano [ZOOM CAM] e [CAM PIENA].</div>
+          <label style="display:flex;gap:8px;align-items:center;color:var(--mut);margin-bottom:10px"><input type="checkbox" id="aeMp4" checked style="accent-color:var(--acc)"> crea anche l'MP4 già montato</label>
+          <button class="pri" onclick="exportAE()">⬇ Esporta montaggio</button> <button onclick="openFolder()">📂 Cartella</button>
+        </div>
+      </div>
+    </div>
+
     <div class="sec hidden" id="clipSec">
       <h2><span class="n">2</span> Clip trovate <span style="flex:1"></span><span id="sortInfo" style="letter-spacing:0;text-transform:none;font-weight:400"></span></h2>
       <div class="clips" id="clips"></div>
@@ -254,6 +276,14 @@ async function refresh(){
   $('#foot').classList.toggle('hidden',!hasClips);
   $('#relayBtn').classList.toggle('hidden',!hasClips);
   if(hasClips){$('#anBtn').textContent='🔁 Rianalizza'}
+  $('#aeSec').classList.toggle('hidden',!p.info);$('#aeBtn').disabled=!!j.running;
+  const ae=p.autoedit;
+  if(ae&&ae.preview){$('#aeRes').classList.remove('hidden');const u=`/p/${PID}/${ae.preview}`;if(!$('#aeVid').src.endsWith(u))$('#aeVid').src=u;
+    const r=ae.report,box=(k,v)=>`<div class="chip" style="border-radius:12px;padding:10px 12px"><div style="color:var(--mut);font-size:11px">${k}</div><b style="font-size:18px">${v}</b></div>`;
+    $('#aeRep').innerHTML=box('Prima',tc(r.durata_originale).split('.')[0])+box('Dopo',tc(r.durata_finale).split('.')[0])+box('Tagli',r.tagli)+box('Zoom cam',r.zoom)+box('Cam a tutto schermo',r.cam_piena)+box('Tolti',Math.round(r.tagliato)+' s');}
+  else $('#aeRes').classList.add('hidden');
+  if(p.last_autoedit&&j.name==='autoedit_export'&&!j.running&&!j.error){const d=$('#done');d.style.display='block';
+    d.innerHTML=`✅ <b>Montaggio esportato.</b> In Premiere: <b>File › Importa</b> e scegli <code>${esc(p.last_autoedit.xml.split(/[\\/]/).pop())}</code>${p.last_autoedit.mp4?' · trovi anche l\'MP4 già montato nella stessa cartella':''}. <button class="sm" onclick="openFolder()">Apri cartella</button>`}
   const sig=JSON.stringify((p.clips||[]).map(c=>[c.id,c.preview,c.start,c.end,c.score,c.selected,c.title]));
   if(sig!==lastClipsSig){lastClipsSig=sig;drawClips()}
   if(p.last_export&&j.name==='export'&&!j.running&&!j.error) showDone(p.last_export);
@@ -327,6 +357,10 @@ async function saveLayout(rerender){
 }
 
 /* ---------- analisi ---------- */
+async function startAE(){await saveLayout();$('#done').style.display='none';
+  const r=await api(`/api/project/${PID}/autoedit`,{ritmo:$('#aeRitmo').value,zoom:$('#aeZoom').value,sens:+$('#aeSens').value,full_cam:$('#aeFull').checked});
+  if(!r.ok)alert('Aspetta che finisca il lavoro in corso')}
+async function exportAE(){const r=await api(`/api/project/${PID}/autoedit/export`,{mp4:$('#aeMp4').checked});if(!r.ok)alert('Aspetta che finisca il lavoro in corso')}
 async function startAnalyze(){
   await saveLayout();
   await api(`/api/project/${PID}/analyze`,{max_clips:+$('#oN').value,model:$('#oModel').value,max_len:+$('#oMax').value,min_len:+$('#oMin').value});
