@@ -111,10 +111,11 @@ def build_xml(clips, src, info, layout, rendered, out_xml):
 
 
 def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=None, bip=None):
-    """Sequenza orizzontale.
-    V1 = pezzi tagliati; quelli zoomati hanno l'effetto Movimento (scala + posizione), modificabile.
-    V2 = entrate/uscite degli zoom già renderizzate con il motion blur (si possono spostare o cancellare).
-    A1/A2 = audio originale."""
+    """Sequenza orizzontale, tutto modificabile:
+    V1 = il video tagliato (clip intere, collegate al loro audio);
+    V2 = gli zoom come livello sopra (stessa sorgente con Movimento): si spostano, si allungano, si cancellano;
+    V3 = entrate/uscite degli zoom già renderizzate con il motion blur;
+    A1 = audio originale in un'unica traccia stereo (buchi sulle parolacce), A2 = suoni di censura."""
     from .autoedit import view, subpieces, build_pieces
     fps = info["fps"]
     tb = int(round(fps)); ntsc = "TRUE" if abs(fps - tb) > 0.01 else "FALSE"
@@ -122,13 +123,40 @@ def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=
     rate = f"<rate><timebase>{tb}</timebase><ntsc>{ntsc}</ntsc></rate>"
     W, H = info["w"], info["h"]
     src_frames = F(info["dur"]); src_name = os.path.basename(src)
-    items, t = [], 0
-    for a, b, lv, kind in subpieces(build_pieces(ed["keep"], ed["zooms"]), ed):
+
+    # tagli: ogni pezzo tenuto è una clip intera su V1
+    keeps = []
+    t = 0
+    for a, b in sorted(ed["keep"]):
         i0, i1 = F(a), F(b)
-        if i1 <= i0:
-            continue
-        items.append((t, i0, i1, lv, kind, a, b)); t += i1 - i0
+        if i1 > i0:
+            keeps.append((t, i0, i1, a, b)); t += i1 - i0
     total = t
+
+    def tl_of(x):
+        """posizione in timeline (fotogrammi) di un istante della sorgente"""
+        for st, i0, i1, a, b in keeps:
+            if a - 1e-6 <= x <= b + 1e-6:
+                return st + min(max(F(x), i0), i1) - i0
+        return None
+
+    # zoom: uno per pezzo tenuto (spezzato solo dove c'è un taglio), più le entrate/uscite animate
+    zclips, fxclips = [], []
+    for a, b, lv, kind in subpieces(build_pieces(ed["keep"], ed["zooms"]), ed):
+        if not lv:
+            continue
+        s0, s1 = tl_of(a), tl_of(b)
+        if s0 is None or s1 is None or s1 <= s0:
+            continue
+        i0 = F(a)
+        last = zclips[-1] if zclips else None
+        if last and last["lv"] == lv and last["end"] == s0 and last["out"] == i0:
+            last["end"] = s1; last["out"] = i0 + (s1 - s0)
+        else:
+            zclips.append({"start": s0, "end": s1, "in": i0, "out": i0 + (s1 - s0), "lv": lv})
+        if kind != "static":
+            fxclips.append((s0, s1, kind, a, b))
+
     defined = set()
 
     def file_el(fid, path, nm, frames, audio=True):
@@ -145,8 +173,6 @@ def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=
                 f"</samplecharacteristics></video>{aud}</media></file>")
 
     def motion(lv):
-        if not lv:
-            return ""
         x0, y0, w, h, s = view(info, cam, lv, ed["zoom"])
         ax = W / 2 + (W / 2 - (x0 + w / 2)) * s
         ay = H / 2 + (H / 2 - (y0 + h / 2)) * s
@@ -157,54 +183,68 @@ def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=
                 f"<value><horiz>{(ax - W / 2) / W:.6f}</horiz><vert>{(ay - H / 2) / H:.6f}</vert></value></parameter>"
                 "</effect></filter>")
 
-    labels = {0: "", 1: " [ZOOM CAM]", 2: " [CAM PIENA]"}
+    # audio: pezzi di A1 per ogni clip di V1, con i buchi sulle parolacce (il suono va su A2)
+    cens = [c for c in (ed.get("censor") or []) if c.get("on", True)]
+    has_audio = info.get("has_audio", True)
+    apieces, beeps, vlinks = [], [], []
+    for k, (st, i0, i1, a, b) in enumerate(keeps):
+        mine = []
+        if has_audio:
+            holes = sorted((max(F(c["s"]), i0), min(F(c["e"]), i1)) for c in cens if F(c["e"]) > i0 and F(c["s"]) < i1)
+            cur = i0
+            for h0, h1 in holes:
+                if h0 > cur:
+                    mine.append(len(apieces)); apieces.append((st + cur - i0, cur, h0, k))
+                if h1 > h0:
+                    beeps.append((st + h0 - i0, h1 - h0))
+                cur = max(cur, h1)
+            if i1 > cur:
+                mine.append(len(apieces)); apieces.append((st + cur - i0, cur, i1, k))
+        vlinks.append(mine)
+
+    def link(cid, media, track, idx):
+        return (f"<link><linkclipref>{cid}</linkclipref><mediatype>{media}</mediatype>"
+                f"<trackindex>{track}</trackindex><clipindex>{idx + 1}</clipindex></link>")
+
+    labels = {1: "ZOOM CAM", 2: "CAM PIENA"}
     x = ['<?xml version="1.0" encoding="UTF-8"?>', "<!DOCTYPE xmeml>", '<xmeml version="4">',
          f"<sequence><name>{escape(name)}</name>{rate}<duration>{total}</duration>"
          f"<timecode>{rate}<string>00:00:00:00</string><frame>0</frame><displayformat>NDF</displayformat></timecode>"
          f"<media><video><format><samplecharacteristics>{rate}<width>{W}</width><height>{H}</height>"
          "<anamorphic>FALSE</anamorphic><pixelaspectratio>square</pixelaspectratio><fielddominance>none</fielddominance>"
          "</samplecharacteristics></format><track>"]
-    for k, (st, i0, i1, lv, kind, a, b) in enumerate(items):
-        x.append(f'<clipitem id="v{k}"><name>{escape(src_name + labels[lv])}</name><enabled>TRUE</enabled>'
+    for k, (st, i0, i1, a, b) in enumerate(keeps):
+        links = link(f"v{k}", "video", 1, k) + "".join(link(f"a{j}", "audio", 1, j) for j in vlinks[k])
+        x.append(f'<clipitem id="v{k}"><name>{escape(src_name)}</name><enabled>TRUE</enabled>'
                  f"<duration>{src_frames}</duration>{rate}<start>{st}</start><end>{st + i1 - i0}</end>"
-                 f"<in>{i0}</in><out>{i1}</out>" + file_el("src", src, src_name, src_frames) + motion(lv) + "</clipitem>")
+                 f"<in>{i0}</in><out>{i1}</out>" + file_el("src", src, src_name, src_frames) + links + "</clipitem>")
+    x.append("</track><track>")
+    for k, z in enumerate(zclips):
+        x.append(f'<clipitem id="z{k}"><name>{labels.get(z["lv"], "ZOOM")}</name><enabled>TRUE</enabled>'
+                 f"<duration>{src_frames}</duration>{rate}<start>{z['start']}</start><end>{z['end']}</end>"
+                 f"<in>{z['in']}</in><out>{z['out']}</out>" + file_el("src", src, src_name, src_frames) + motion(z["lv"]) + "</clipitem>")
     x.append("</track>")
     if fx:
         x.append("<track>")
-        for k, (st, i0, i1, lv, kind, a, b) in enumerate(items):
-            fp = fx.get((round(a, 3), round(b, 3))) if kind != "static" else None
+        for k, (s0, s1, kind, a, b) in enumerate(fxclips):
+            fp = fx.get((round(a, 3), round(b, 3)))
             if not fp:
                 continue
-            d = i1 - i0
+            d = s1 - s0
             x.append(f'<clipitem id="fx{k}"><name>{"ZOOM IN" if kind == "in" else "ZOOM OUT"} (motion blur)</name>'
-                     f"<enabled>TRUE</enabled><duration>{d}</duration>{rate}<start>{st}</start><end>{st + d}</end>"
+                     f"<enabled>TRUE</enabled><duration>{d}</duration>{rate}<start>{s0}</start><end>{s1}</end>"
                      f"<in>0</in><out>{d}</out>" + file_el(f"fx{k}", fp, os.path.basename(fp), d, audio=False) + "</clipitem>")
         x.append("</track>")
     x.append("</video><audio>")
-    cens = [c for c in (ed.get("censor") or []) if c.get("on", True)]
-    beeps = []
-    if info.get("has_audio", True):
-        # pezzi audio con un buco sulle parolacce (il bip va su A3)
-        apieces = []
-        for st, i0, i1, lv, kind, a, b in items:
-            holes = sorted((max(F(c["s"]), i0), min(F(c["e"]), i1)) for c in cens if F(c["e"]) > i0 and F(c["s"]) < i1)
-            cur = i0
-            for h0, h1 in holes:
-                if h0 > cur:
-                    apieces.append((st + cur - i0, cur, h0))
-                if h1 > h0:
-                    beeps.append((st + h0 - i0, h1 - h0))
-                cur = max(cur, h1)
-            if i1 > cur:
-                apieces.append((st + cur - i0, cur, i1))
-        for ch in range(1, min(info["ch"], 2) + 1):
-            x.append("<track>")
-            for k, (st, i0, i1) in enumerate(apieces):
-                x.append(f'<clipitem id="a{ch}_{k}"><name>{escape(src_name)}</name><enabled>TRUE</enabled>'
-                         f"<duration>{src_frames}</duration>{rate}<start>{st}</start><end>{st + i1 - i0}</end>"
-                         f'<in>{i0}</in><out>{i1}</out><file id="src"/><sourcetrack><mediatype>audio</mediatype>'
-                         f"<trackindex>{ch}</trackindex></sourcetrack></clipitem>")
-            x.append("</track>")
+    if has_audio:
+        x.append('<track premiereTrackType="Stereo">' if info.get("ch", 2) >= 2 else "<track>")
+        for j, (st, i0, i1, k) in enumerate(apieces):
+            links = link(f"v{k}", "video", 1, k) + "".join(link(f"a{m}", "audio", 1, m) for m in vlinks[k])
+            x.append(f'<clipitem id="a{j}"><name>{escape(src_name)}</name><enabled>TRUE</enabled>'
+                     f"<duration>{src_frames}</duration>{rate}<start>{st}</start><end>{st + i1 - i0}</end>"
+                     f'<in>{i0}</in><out>{i1}</out><file id="src"/><sourcetrack><mediatype>audio</mediatype>'
+                     f"<trackindex>1</trackindex></sourcetrack>{links}</clipitem>")
+        x.append("</track>")
     if beeps and bip:
         bfr = F(3.0)
         x.append("<track>")
