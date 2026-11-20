@@ -349,6 +349,7 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
           <div class="panel"><h4>Esporta</h4>
             <button class="pri big2" onclick="edExport(true,false)">📤 Esporta su Premiere</button>
             <button class="big2" onclick="edExport(false,true)">⬇ Scarica il video montato</button>
+            <button class="big2" onclick="edExportFC()" style="border-color:#a070ff88">🦉 Esporta per FilmCraft</button>
             <button class="big2" onclick="edExportKden()" style="border-color:#5aa0ff66">🎞 Esporta per Kdenlive</button>
             <div class="hint" style="margin-top:4px">Crea il progetto Kdenlive con tagli, zoom e censura già sulla timeline: doppio clic e lavori lì.</div>
             <button class="big2" onclick="openFolder()">📂 Apri cartella</button>
@@ -485,7 +486,7 @@ async function refresh(){
   if(VIEW==='vRange'&&p.strip&&R&&!R.stripImg)rangeInit(true);
   if(justDone&&j.name==='edit_preview'&&p.edit_preview){const v=$('#prevV');v.src=`/p/${PID}/${p.edit_preview}`;$('#prevModal').classList.add('on')}
   if(justDone&&j.name==='edit_export'&&p.last_edit_export){const e=p.last_edit_export,d=$('#done');d.style.display='block';
-    d.innerHTML=`✅ <b>Esportato.</b> ${e.xml?`In Premiere: <b>File › Importa</b> e scegli <code>${esc(e.xml.split(/[\\/]/).pop())}</code> · V1 = tagli e zoom (Movimento modificabile), V2 = entrate degli zoom con motion blur. `:''}${e.kdenlive?`Kdenlive: fai <b>doppio clic</b> su <code>${esc(e.kdenlive.split(/[\\/]/).pop())}</code> (o File › Apri) · V1 = tagli e zoom (effetto Trasforma), V2 = zoom con motion blur, A2 = suoni di censura. `:''}${e.mp4?`Video pronto: <code>${esc(e.mp4.split(/[\\/]/).pop())}</code>. `:''}<button class="sm" onclick="openFolder()">Apri cartella</button>`;window.scrollTo({top:0,behavior:'smooth'})}
+    d.innerHTML=`✅ <b>Esportato.</b> ${e.xml?`In Premiere: <b>File › Importa</b> e scegli <code>${esc(e.xml.split(/[\\/]/).pop())}</code> · V1 = tagli e zoom (Movimento modificabile), V2 = entrate degli zoom con motion blur. `:''}${e.filmcraft?`FilmCraft: <b>File › Importa</b> (Ctrl+I) e scegli <code>${esc(e.filmcraft.split(/[\\/]/).pop())}</code> · V1 = tagli e zoom (Movimento modificabile), V2 = zoom con motion blur, A3 = suoni di censura. `:''}${e.kdenlive?`Kdenlive: fai <b>doppio clic</b> su <code>${esc(e.kdenlive.split(/[\\/]/).pop())}</code> (o File › Apri) · V1 = tagli e zoom (effetto Trasforma), V2 = zoom con motion blur, A2 = suoni di censura. `:''}${e.mp4?`Video pronto: <code>${esc(e.mp4.split(/[\\/]/).pop())}</code>. `:''}<button class="sm" onclick="openFolder()">Apri cartella</button>`;window.scrollTo({top:0,behavior:'smooth'})}
 }
 function toggleLog(){const l=$('#jlog');l.style.display=l.style.display==='block'?'none':'block'}
 async function stopJob(){await api(`/api/project/${PID}/stop`,{})}
@@ -941,6 +942,8 @@ function edStatsLocal(){ED.report=Object.assign({},ED.report||{},{durata_finale:
 function edStats(){const r=ED.report||{};const box=(k,v)=>`<div class="stat"><small>${k}</small><b>${v}</b></div>`;
   $('#eStats').innerHTML=box('Prima',tcs(ED.range[1]-ED.range[0]))+box('Dopo',tcs(r.durata_finale||0))+box('Pezzi',r.tagli||0)+box('Tolti',tcs(r.tagliato||0))+box('Zoom',r.zoom||0)+box('Cam piena',r.cam_piena||0)+box('Spam tolto',(ED.spam||[]).length)+box('Bip',(ED.censor||[]).filter(c=>c.on).length)}
 async function edTruePreview(){await edSave();const r=await api(`/api/project/${PID}/edit/preview`,{t:$('#ev').currentTime});if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else $('#jobbar').classList.remove('hidden')}
+async function edExportFC(){await edSave();const r=await api(`/api/project/${PID}/edit/export`,{premiere:false,mp4:false,filmcraft:true});
+  if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else{$('#jobbar').classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'})}}
 async function edExportKden(){await edSave();const r=await api(`/api/project/${PID}/edit/export`,{premiere:false,mp4:false,kdenlive:true});
   if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else{$('#jobbar').classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'})}}
 async function edExport(xml,mp4){await edSave();const r=await api(`/api/project/${PID}/edit/export`,{premiere:xml,mp4});if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else{$('#jobbar').classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'})}}

@@ -363,13 +363,13 @@ def job_edit_preview(pid, t0):
     set_job(pid, msg="Anteprima vera pronta")
 
 
-def job_edit_export(pid, premiere_xml, mp4, kden=False):
+def job_edit_export(pid, premiere_xml, mp4, kden=False, fcraft=False):
     p = load(pid); ed = p["edit"]; cam = p.get("edit_cam")
     out = p["out_dir"]; os.makedirs(out, exist_ok=True)
     base = re.sub(r'[\\/:*?"<>|]+', "", p.get("name", "video"))[:50]
     stamp = time.strftime("%H%M")
     res = {}
-    proj = premiere_xml or kden
+    proj = premiere_xml or kden or fcraft
     steps = (1 if proj else 0) + (1 if mp4 else 0)
     k = 0
     if proj:
@@ -388,6 +388,11 @@ def job_edit_export(pid, premiere_xml, mp4, kden=False):
             premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, xml, name=f"{base} - Montaggio Jarvis", fx=fx, bip=bip)
             res["xml"] = xml
             set_job(pid, log="XML Premiere: " + xml)
+        if fcraft:
+            fp_ = os.path.join(out, f"{base}_FILMCRAFT_{stamp}.xml")
+            premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, fp_, name=f"{base} - Montaggio Jarvis", fx=fx, bip=bip)
+            res["filmcraft"] = fp_
+            set_job(pid, log="Per FilmCraft: " + fp_)
         if kden:
             kp = os.path.join(out, f"{base}_MONTATO_{stamp}.kdenlive")
             kdenlive.build(ed, p["src_path"], p["info"], cam, kp, name=f"{base} - Montaggio Jarvis", fx=fx, sfx=bip)
@@ -488,7 +493,7 @@ def api_edit_preview(pid):
 @app.route("/api/project/<pid>/edit/export", methods=["POST"])
 def api_edit_export(pid):
     d = request.json or {}
-    return jsonify({"ok": start_job(pid, "edit_export", lambda: job_edit_export(pid, d.get("premiere", True), d.get("mp4", False), d.get("kdenlive", False)))})
+    return jsonify({"ok": start_job(pid, "edit_export", lambda: job_edit_export(pid, d.get("premiere", True), d.get("mp4", False), d.get("kdenlive", False), d.get("filmcraft", False)))})
 
 
 @app.route("/api/project/<pid>/status", methods=["POST"])
