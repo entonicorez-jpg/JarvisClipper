@@ -7,7 +7,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory, abort
 FROZEN = getattr(sys, "frozen", False)
 BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))  # file dell'app (sola lettura)
 sys.path.insert(0, BASE)
-from core import media, analyze, render, premiere, gpu, autoedit, updater, kdenlive, layout as lay  # noqa: E402
+from core import media, analyze, render, premiere, gpu, autoedit, updater, kdenlive, filmcraft, layout as lay  # noqa: E402
 
 # dati scrivibili: accanto allo script, oppure in %LOCALAPPDATA%\JarvisClipper se è l'app installata
 DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "JarvisClipper") if FROZEN else BASE
@@ -393,6 +393,10 @@ def job_edit_export(pid, premiere_xml, mp4, kden=False, fcraft=False):
             premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, fp_, name=f"{base} - Montaggio Jarvis", fx=fx, bip=bip)
             res["filmcraft"] = fp_
             set_job(pid, log="Per FilmCraft: " + fp_)
+            try:
+                res["filmcraft_opened"] = filmcraft.open_xml(fp_)
+            except Exception as e:
+                set_job(pid, log="FilmCraft non si apre: " + str(e))
         if kden:
             kp = os.path.join(out, f"{base}_MONTATO_{stamp}.kdenlive")
             kdenlive.build(ed, p["src_path"], p["info"], cam, kp, name=f"{base} - Montaggio Jarvis", fx=fx, sfx=bip)
@@ -407,10 +411,11 @@ def job_edit_export(pid, premiere_xml, mp4, kden=False, fcraft=False):
         set_job(pid, log="Video: " + fp)
     update(pid, last_edit_export=res)
     set_job(pid, msg="Esportato!")
-    try:
-        os.startfile(out)
-    except Exception:
-        pass
+    if not res.get("filmcraft_opened"):
+        try:
+            os.startfile(out)
+        except Exception:
+            pass
 
 
 # ------------------------------------------------------------------ API
@@ -494,6 +499,13 @@ def api_edit_preview(pid):
 def api_edit_export(pid):
     d = request.json or {}
     return jsonify({"ok": start_job(pid, "edit_export", lambda: job_edit_export(pid, d.get("premiere", True), d.get("mp4", False), d.get("kdenlive", False), d.get("filmcraft", False)))})
+
+
+@app.route("/api/filmcraft", methods=["GET", "POST"])
+def api_filmcraft():
+    if request.method == "POST":
+        return jsonify({"ok": filmcraft.start_install()})
+    return jsonify(filmcraft.status())
 
 
 @app.route("/api/project/<pid>/status", methods=["POST"])

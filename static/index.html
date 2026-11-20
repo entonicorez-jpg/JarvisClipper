@@ -350,6 +350,7 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
             <button class="pri big2" onclick="edExport(true,false)">📤 Esporta su Premiere</button>
             <button class="big2" onclick="edExport(false,true)">⬇ Scarica il video montato</button>
             <button class="big2" onclick="edExportFC()" style="border-color:#a070ff88">🦉 Esporta per FilmCraft</button>
+            <div class="hint" id="fcStat" style="margin-top:4px"></div>
             <button class="big2" onclick="edExportKden()" style="border-color:#5aa0ff66">🎞 Esporta per Kdenlive</button>
             <div class="hint" style="margin-top:4px">Crea il progetto Kdenlive con tagli, zoom e censura già sulla timeline: doppio clic e lavori lì.</div>
             <button class="big2" onclick="openFolder()">📂 Apri cartella</button>
@@ -486,7 +487,7 @@ async function refresh(){
   if(VIEW==='vRange'&&p.strip&&R&&!R.stripImg)rangeInit(true);
   if(justDone&&j.name==='edit_preview'&&p.edit_preview){const v=$('#prevV');v.src=`/p/${PID}/${p.edit_preview}`;$('#prevModal').classList.add('on')}
   if(justDone&&j.name==='edit_export'&&p.last_edit_export){const e=p.last_edit_export,d=$('#done');d.style.display='block';
-    d.innerHTML=`✅ <b>Esportato.</b> ${e.xml?`In Premiere: <b>File › Importa</b> e scegli <code>${esc(e.xml.split(/[\\/]/).pop())}</code> · V1 = tagli e zoom (Movimento modificabile), V2 = entrate degli zoom con motion blur. `:''}${e.filmcraft?`FilmCraft: <b>File › Importa</b> (Ctrl+I) e scegli <code>${esc(e.filmcraft.split(/[\\/]/).pop())}</code> · V1 = tagli e zoom (Movimento modificabile), V2 = zoom con motion blur, A3 = suoni di censura. `:''}${e.kdenlive?`Kdenlive: fai <b>doppio clic</b> su <code>${esc(e.kdenlive.split(/[\\/]/).pop())}</code> (o File › Apri) · V1 = tagli e zoom (effetto Trasforma), V2 = zoom con motion blur, A2 = suoni di censura. `:''}${e.mp4?`Video pronto: <code>${esc(e.mp4.split(/[\\/]/).pop())}</code>. `:''}<button class="sm" onclick="openFolder()">Apri cartella</button>`;window.scrollTo({top:0,behavior:'smooth'})}
+    d.innerHTML=`✅ <b>Esportato.</b> ${e.xml?`In Premiere: <b>File › Importa</b> e scegli <code>${esc(e.xml.split(/[\\/]/).pop())}</code> · V1 = tagli e zoom (Movimento modificabile), V2 = entrate degli zoom con motion blur. `:''}${e.filmcraft&&e.filmcraft_opened?`FilmCraft Jarvis si sta aprendo con il montaggio già dentro. `:''}${e.filmcraft&&!e.filmcraft_opened?`FilmCraft: <b>File › Importa</b> (Ctrl+I) e scegli <code>${esc(e.filmcraft.split(/[\\/]/).pop())}</code> · V1 = tagli e zoom (Movimento modificabile), V2 = zoom con motion blur, A3 = suoni di censura. `:''}${e.kdenlive?`Kdenlive: fai <b>doppio clic</b> su <code>${esc(e.kdenlive.split(/[\\/]/).pop())}</code> (o File › Apri) · V1 = tagli e zoom (effetto Trasforma), V2 = zoom con motion blur, A2 = suoni di censura. `:''}${e.mp4?`Video pronto: <code>${esc(e.mp4.split(/[\\/]/).pop())}</code>. `:''}<button class="sm" onclick="openFolder()">Apri cartella</button>`;window.scrollTo({top:0,behavior:'smooth'})}
 }
 function toggleLog(){const l=$('#jlog');l.style.display=l.style.display==='block'?'none':'block'}
 async function stopJob(){await api(`/api/project/${PID}/stop`,{})}
@@ -741,7 +742,19 @@ async function startEdit(){await camSave();
 let ED=null, edrag=null, hist=[], redo=[], saveT=null, raf=null, montato=true, sel=null;
 const T_IN=0.26, T_OUT=0.18, LANES={ruler:[0,18],audio:[20,58],cut:[82,46],zoom:[134,46]};
 function edUnload(){const v=$('#ev');if(v){v.pause()}cancelAnimationFrame(raf);raf=null;if(typeof edBeep==='function')edBeep(false)}
+/* --- FilmCraft Jarvis (FilmCraft con "Aggiungi taglio e seleziona") --- */
+let fcT=null;
+async function fcStatus(){const el=$('#fcStat');if(!el)return;let d;try{d=await api('/api/filmcraft')}catch(e){return}
+  const j=d.job||{};clearTimeout(fcT);
+  if(j.running){el.innerHTML=`⏳ ${esc(j.msg)}`;fcT=setTimeout(fcStatus,1000);return}
+  if(j.error){el.innerHTML=`⚠ ${esc(j.error)} <button class="sm" onclick="fcInstall()">Riprova</button>`;return}
+  if(d.update)el.innerHTML=`FilmCraft Jarvis: c'è una versione nuova. <button class="sm" onclick="fcInstall()">Aggiorna</button>`;
+  else if(d.installed)el.innerHTML=`✅ FilmCraft Jarvis installato: dopo l'export si apre da solo con il montaggio dentro.`;
+  else if(d.ready)el.innerHTML=`FilmCraft Jarvis ha il comando <b>Aggiungi taglio e seleziona</b> e si apre da solo dopo l'export. <button class="sm" onclick="fcInstall()">Installa</button>`;
+  else el.innerHTML=`In FilmCraft: File › Importa (Ctrl+I) e scegli l'XML. FilmCraft Jarvis è in preparazione…`}
+async function fcInstall(){await api('/api/filmcraft',{});setTimeout(fcStatus,300)}
 async function edLoad(){
+  fcStatus();
   const v=$('#ev');
   const p=P; if(!p.edit){return}
   const e=JSON.parse(JSON.stringify(p.edit));

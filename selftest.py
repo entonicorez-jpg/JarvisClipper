@@ -54,7 +54,8 @@ def run(out_path):
     step("filtro parole", lambda: (W.censor_ranges([{"w": "cazzo", "s": 1, "e": 1.4}, {"w": "porco", "s": 2, "e": 2.3}, {"w": "dio", "s": 2.3, "e": 2.6}]),
                                     W.find_spam([{"s": 0, "e": 2, "text": "fate tap tap ragazzi"}]))[0].__len__())
     step("rilevamento voce (VAD)", lambda: len(autoedit.speech_segments(vid, 0, 20, "jumpcut")))
-    from core import updater
+    from core import updater, filmcraft
+    step("filmcraft jarvis (modulo)", lambda: filmcraft.DIR)
     step("versione inclusa", lambda: updater.current_version() if updater.current_version() != "dev" else (_ for _ in ()).throw(RuntimeError("version.txt mancante")))
     step("autocam (opencv)", lambda: layout.auto_cam([], info))
     for mod in ("yt_dlp", "curl_cffi", "cv2", "webview", "faster_whisper", "ctranslate2", "flask"):

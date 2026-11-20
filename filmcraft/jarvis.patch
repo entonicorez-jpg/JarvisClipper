@@ -1,3 +1,16 @@
+diff --git a/apps/filmcraft/src/main.rs b/apps/filmcraft/src/main.rs
+index f6e64ea..efbc58e 100644
+--- a/apps/filmcraft/src/main.rs
++++ b/apps/filmcraft/src/main.rs
+@@ -373,7 +373,7 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
+             }
+         }
+         let mut app = FilmcraftApp::new(session);
+-        app.set_startup_update_check(true);
++        app.set_startup_update_check(false); // Jarvis: aggiornata da JarvisClipper
+         app.graphics_notice = notice;
+         if recover == Some(false) {
+             app.dialog = None;
 diff --git a/crates/engine/src/commands.rs b/crates/engine/src/commands.rs
 index 44399e4..8a5b56f 100644
 --- a/crates/engine/src/commands.rs
