@@ -7,7 +7,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory, abort
 FROZEN = getattr(sys, "frozen", False)
 BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))  # file dell'app (sola lettura)
 sys.path.insert(0, BASE)
-from core import media, analyze, render, premiere, gpu, autoedit, updater, cutroom, layout as lay  # noqa: E402
+from core import media, analyze, render, premiere, gpu, autoedit, updater, kdenlive, layout as lay  # noqa: E402
 
 # dati scrivibili: accanto allo script, oppure in %LOCALAPPDATA%\JarvisClipper se è l'app installata
 DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "JarvisClipper") if FROZEN else BASE
@@ -18,7 +18,7 @@ USER_DIR = os.path.join(os.path.expanduser("~"), "Videos", "JarvisClipper")
 os.makedirs(PROJ_DIR, exist_ok=True)
 os.makedirs(USER_DIR, exist_ok=True)
 
-DEFAULT_CFG = {"cutroom_url": "http://127.0.0.1:8765", "api_key": "", "ai_model": "claude-sonnet-5-5", "model": "small", "max_clips": 15,
+DEFAULT_CFG = {"api_key": "", "ai_model": "claude-sonnet-5-5", "model": "small", "max_clips": 15,
                "split": 0.4, "min_len": 15, "max_len": 59, "pre": 14, "post": 8, "lang": "it"}
 
 app = Flask(__name__, static_folder=os.path.join(BASE, "static"))
@@ -363,15 +363,16 @@ def job_edit_preview(pid, t0):
     set_job(pid, msg="Anteprima vera pronta")
 
 
-def job_edit_export(pid, premiere_xml, mp4):
+def job_edit_export(pid, premiere_xml, mp4, kden=False):
     p = load(pid); ed = p["edit"]; cam = p.get("edit_cam")
     out = p["out_dir"]; os.makedirs(out, exist_ok=True)
     base = re.sub(r'[\\/:*?"<>|]+', "", p.get("name", "video"))[:50]
     stamp = time.strftime("%H%M")
     res = {}
-    steps = (1 if premiere_xml else 0) + (1 if mp4 else 0)
+    proj = premiere_xml or kden
+    steps = (1 if proj else 0) + (1 if mp4 else 0)
     k = 0
-    if premiere_xml:
+    if proj:
         fxdir = os.path.join(out, f"{base}_zoom_blur_{stamp}")
         fx = autoedit.render_fx(p["src_path"], p["info"], cam, ed, fxdir,
                                 lambda f, m: set_job(pid, progress=f / steps, msg=m), lambda: stopped(pid))
@@ -382,10 +383,17 @@ def job_edit_export(pid, premiere_xml, mp4):
             src = ["-i", sfx] if sfx else ["-f", "lavfi", "-i", "sine=f=1000:sample_rate=48000"]
             media.run(["-y", "-hide_banner", "-loglevel", "error"] + src + ["-t", "3", "-af",
                        f"volume={autoedit.SFX_VOL if sfx else 2.4}", "-ar", "48000", "-ac", "2", bip])
-        xml = os.path.join(out, f"{base}_MONTATO_{stamp}.xml")
-        premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, xml, name=f"{base} - Montaggio Jarvis", fx=fx, bip=bip)
-        res["xml"] = xml; k = 1
-        set_job(pid, log="XML Premiere: " + xml)
+        if premiere_xml:
+            xml = os.path.join(out, f"{base}_MONTATO_{stamp}.xml")
+            premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, xml, name=f"{base} - Montaggio Jarvis", fx=fx, bip=bip)
+            res["xml"] = xml
+            set_job(pid, log="XML Premiere: " + xml)
+        if kden:
+            kp = os.path.join(out, f"{base}_MONTATO_{stamp}.kdenlive")
+            kdenlive.build(ed, p["src_path"], p["info"], cam, kp, name=f"{base} - Montaggio Jarvis", fx=fx, sfx=bip)
+            res["kdenlive"] = kp
+            set_job(pid, log="Progetto Kdenlive: " + kp)
+        k = 1
     if mp4:
         fp = os.path.join(out, f"{base}_MONTATO_{stamp}.mp4")
         autoedit.render(p["src_path"], p["info"], cam, ed, fp,
@@ -400,35 +408,7 @@ def job_edit_export(pid, premiere_xml, mp4):
         pass
 
 
-def job_edit_cutroom(pid):
-    p = load(pid); ed = p["edit"]; base = cfg()["cutroom_url"]
-    cutroom.start(base, progress=lambda m: set_job(pid, msg=m))
-    name = re.sub(r'[\\/:*?"<>|]+', "", p.get("name", "Jarvis"))[:80]
-    r = cutroom.send(p["src_path"], p["info"], p.get("edit_cam"), ed, f"{name} (Jarvis)", base,
-                     lambda f, m: set_job(pid, progress=f, msg=m), lambda m: set_job(pid, log=m), lambda: stopped(pid))
-    update(pid, last_cutroom=r)
-    set_job(pid, msg="Aperto in CUTROOM: è il primo progetto della lista", log=f"CUTROOM: {r['tagli']} tagli, {r['zoom']} zoom")
-    webbrowser.open(r["url"])
-
-
 # ------------------------------------------------------------------ API
-@app.route("/api/project/<pid>/edit/cutroom", methods=["POST"])
-def api_edit_cutroom(pid):
-    return jsonify({"ok": start_job(pid, "edit_cutroom", lambda: job_edit_cutroom(pid))})
-
-
-@app.route("/api/cutroom", methods=["GET", "POST"])
-def api_cutroom():
-    if request.method == "POST":
-        what = (request.json or {}).get("do")
-        if what == "install" and not cutroom.STATE["running"]:
-            cutroom.STATE["running"] = True
-            threading.Thread(target=cutroom.install, daemon=True).start()
-        elif what == "start":
-            threading.Thread(target=lambda: cutroom.start(cfg()["cutroom_url"], wait=1), daemon=True).start()
-    return jsonify(cutroom.status(cfg()["cutroom_url"]))
-
-
 @app.route("/api/project/<pid>/range", methods=["POST"])
 def api_range(pid):
     d = request.json or {}
@@ -508,7 +488,7 @@ def api_edit_preview(pid):
 @app.route("/api/project/<pid>/edit/export", methods=["POST"])
 def api_edit_export(pid):
     d = request.json or {}
-    return jsonify({"ok": start_job(pid, "edit_export", lambda: job_edit_export(pid, d.get("premiere", True), d.get("mp4", False)))})
+    return jsonify({"ok": start_job(pid, "edit_export", lambda: job_edit_export(pid, d.get("premiere", True), d.get("mp4", False), d.get("kdenlive", False)))})
 
 
 @app.route("/api/project/<pid>/status", methods=["POST"])
