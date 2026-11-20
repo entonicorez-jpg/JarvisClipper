@@ -119,9 +119,41 @@ def job_prepare(pid, source):
     cam = lay.auto_cam([os.path.join(d, f) for f in frames], info, c["split"])
     if cam:
         L["cam"], L["auto"] = cam, True
-    update(pid, src_path=src, info=info, frames=frames, layout=L, status="layout",
+    update(pid, src_path=src, info=info, frames=frames, layout=L, edit_cam=L["cam"], range=[0.0, info["dur"]],
+           status="overview",
            out_dir=os.path.join(os.path.dirname(src), os.path.splitext(os.path.basename(src))[0][:60] + "_JarvisClips"))
-    set_job(pid, msg="Pronto: controlla dove sono cam e gioco", log=f"Video {info['w']}x{info['h']} {info['fps']:.2f}fps, {media.tc(info['dur'])}")
+    set_job(pid, log=f"Video {info['w']}x{info['h']} {info['fps']:.2f}fps, {media.tc(info['dur'])}")
+    build_overview(pid, src, info)
+    update(pid, status="range")
+    set_job(pid, msg="Scegli la parte del VOD da usare")
+
+
+def build_overview(pid, src, info):
+    """Volume ogni 0.5 s (salvato e riusato dalle analisi) + striscia di miniature per la timeline."""
+    import numpy as np
+    d = pdir(pid); dur = info["dur"]
+    prog = {"a": 0.0, "t": 0.0}
+
+    def upd():
+        set_job(pid, progress=0.95 * (0.5 * prog["a"] + 0.5 * prog["t"]), msg="Preparo la panoramica del VOD (volume e miniature)…")
+
+    def thumbs():
+        n = int(min(200, max(40, dur / 30)))
+        media.run(["-y", "-hide_banner", "-loglevel", "error", "-skip_frame", "nokey", "-i", src, "-an",
+                   "-vf", f"fps={n / dur:.6f},scale=160:90,tile={n}x1", "-frames:v", "1", "-q:v", "5",
+                   os.path.join(d, "strip.jpg")])
+        update(pid, strip={"file": "strip.jpg", "n": n})
+        prog["t"] = 1.0; upd()
+    th = threading.Thread(target=thumbs, daemon=True); th.start()
+    half = analyze.audio_energy(src, dur, lambda f: (prog.__setitem__("a", f), upd()), lambda: stopped(pid))
+    np.save(os.path.join(d, "energy.npy"), half)
+    th.join()
+
+
+def load_half(pid):
+    import numpy as np
+    f = os.path.join(pdir(pid), "energy.npy")
+    return np.load(f) if os.path.exists(f) else None
 
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -227,7 +259,9 @@ def download(pid, url):
 def job_analyze(pid, opts):
     p = load(pid)
     c = cfg(); c.update(opts or {})
-    set_job(pid, log="Analisi avviata")
+    c["range"] = p.get("range") or [0, p["info"]["dur"]]
+    c["_half"] = load_half(pid)
+    set_job(pid, log=f"Analisi avviata su {media.tc(c['range'][0])} → {media.tc(c['range'][1])}")
     clips = analyze.analyze(p["src_path"], p["info"], p["layout"], c,
                             lambda f, m: set_job(pid, progress=0.9 * f, msg=m),
                             lambda m: set_job(pid, log=m), lambda: stopped(pid))
@@ -293,49 +327,59 @@ def job_export(pid, ids, do_render):
         pass
 
 
-def job_autoedit(pid, opts):
+def job_edit_analyze(pid, opts):
     p = load(pid)
-    cam = (p.get("layout") or {}).get("cam")
+    cam = p.get("edit_cam")
     if not cam:
-        set_job(pid, log="Nessuna cam nel layout: faccio solo i tagli, senza zoom")
-    pl = autoedit.plan(p["src_path"], p["info"], cam, opts,
-                       lambda f, m: set_job(pid, progress=0.75 * f, msg=m),
-                       lambda m: set_job(pid, log=m), lambda: stopped(pid))
-    pl["opts"] = opts
-    d = pdir(pid)
-    name = f"ae_prev_{int(time.time()) % 10 ** 7}.mp4"
-    autoedit.render(p["src_path"], p["info"], cam, pl, os.path.join(d, name),
-                    lambda f, m: set_job(pid, progress=0.75 + 0.25 * f, msg="Preparo l'anteprima del montaggio…"),
-                    lambda: stopped(pid), limit=45, preview=True)
-    old = (load(pid).get("autoedit") or {}).get("preview")
+        set_job(pid, log="Nessuna cam: faccio solo i tagli, senza zoom")
+    opts = dict(opts or {}); opts["range"] = p.get("range") or [0, p["info"]["dur"]]
+    ed = autoedit.analyze_edit(p["src_path"], p["info"], cam, opts, load_half(pid),
+                               lambda f, m: set_job(pid, progress=f, msg=m),
+                               lambda m: set_job(pid, log=m), lambda: stopped(pid))
+    update(pid, edit=ed, status="editor")
+    set_job(pid, msg="Montaggio pronto: sistemalo nella timeline")
+
+
+def job_edit_preview(pid, t0):
+    p = load(pid); ed = p["edit"]
+    name = f"edprev_{int(time.time()) % 10 ** 7}.mp4"
+    autoedit.render(p["src_path"], p["info"], p.get("edit_cam"), ed, os.path.join(pdir(pid), name),
+                    lambda f, m: set_job(pid, progress=f, msg="Creo l'anteprima con il motion blur vero…"),
+                    lambda: stopped(pid), preview=True, window=(t0, t0 + 30))
+    old = p.get("edit_preview")
     if old:
         try:
-            os.remove(os.path.join(d, old))
+            os.remove(os.path.join(pdir(pid), old))
         except OSError:
             pass
-    pl["preview"] = name
-    update(pid, autoedit=pl)
-    set_job(pid, msg="Montaggio pronto: guarda l'anteprima ed esporta")
+    update(pid, edit_preview=name)
+    set_job(pid, msg="Anteprima vera pronta")
 
 
-def job_autoedit_export(pid, do_mp4):
-    p = load(pid)
-    pl = p.get("autoedit")
-    if not pl:
-        raise RuntimeError("Prima premi 'Monta il video'")
-    cam = (p.get("layout") or {}).get("cam")
+def job_edit_export(pid, premiere_xml, mp4):
+    p = load(pid); ed = p["edit"]; cam = p.get("edit_cam")
     out = p["out_dir"]; os.makedirs(out, exist_ok=True)
-    base = p.get("name", "video")[:50]
-    xml = os.path.join(out, f"{base}_MONTATO_Premiere.xml")
-    premiere.build_autoedit_xml(pl, p["src_path"], p["info"], cam, xml, name=f"{base} - Montaggio Jarvis")
-    set_job(pid, log="XML montaggio: " + xml, progress=0.02)
-    mp4 = None
-    if do_mp4:
-        mp4 = os.path.join(out, f"{base}_MONTATO.mp4")
-        autoedit.render(p["src_path"], p["info"], cam, pl, mp4,
-                        lambda f, m: set_job(pid, progress=0.02 + 0.98 * f, msg=m), lambda: stopped(pid))
-    update(pid, last_autoedit={"xml": xml, "mp4": mp4})
-    set_job(pid, msg="Montaggio esportato", log="Fatto")
+    base = re.sub(r'[\\/:*?"<>|]+', "", p.get("name", "video"))[:50]
+    stamp = time.strftime("%H%M")
+    res = {}
+    steps = (1 if premiere_xml else 0) + (1 if mp4 else 0)
+    k = 0
+    if premiere_xml:
+        fxdir = os.path.join(out, f"{base}_zoom_blur_{stamp}")
+        fx = autoedit.render_fx(p["src_path"], p["info"], cam, ed, fxdir,
+                                lambda f, m: set_job(pid, progress=f / steps, msg=m), lambda: stopped(pid))
+        xml = os.path.join(out, f"{base}_MONTATO_{stamp}.xml")
+        premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, xml, name=f"{base} - Montaggio Jarvis", fx=fx)
+        res["xml"] = xml; k = 1
+        set_job(pid, log="XML Premiere: " + xml)
+    if mp4:
+        fp = os.path.join(out, f"{base}_MONTATO_{stamp}.mp4")
+        autoedit.render(p["src_path"], p["info"], cam, ed, fp,
+                        lambda f, m: set_job(pid, progress=(k + f) / steps, msg=m), lambda: stopped(pid))
+        res["mp4"] = fp
+        set_job(pid, log="Video: " + fp)
+    update(pid, last_edit_export=res)
+    set_job(pid, msg="Esportato!")
     try:
         os.startfile(out)
     except Exception:
@@ -343,16 +387,88 @@ def job_autoedit_export(pid, do_mp4):
 
 
 # ------------------------------------------------------------------ API
-@app.route("/api/project/<pid>/autoedit", methods=["POST"])
-def api_autoedit(pid):
-    opts = request.json or {}
-    return jsonify({"ok": start_job(pid, "autoedit", lambda: job_autoedit(pid, opts))})
-
-
-@app.route("/api/project/<pid>/autoedit/export", methods=["POST"])
-def api_autoedit_export(pid):
+@app.route("/api/project/<pid>/range", methods=["POST"])
+def api_range(pid):
     d = request.json or {}
-    return jsonify({"ok": start_job(pid, "autoedit_export", lambda: job_autoedit_export(pid, d.get("mp4", True)))})
+    p = load(pid)
+    a = max(0.0, float(d.get("start", 0))); b = min(p["info"]["dur"], float(d.get("end", p["info"]["dur"])))
+    if b - a < 5:
+        return jsonify({"error": "La parte scelta è troppo corta"}), 400
+    update(pid, range=[a, b], status="choose")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/project/<pid>/energy")
+def api_energy(pid):
+    """Volume (dB, interi) per la timeline: step = secondi per valore."""
+    half = load_half(pid)
+    if half is None:
+        return jsonify({"step": 0.5, "v": []})
+    a = float(request.args.get("start", 0)); b = float(request.args.get("end", len(half) / 2))
+    step = max(0.5, float(request.args.get("step", 0.5)))
+    seg = half[int(a * 2):int(b * 2)]
+    k = int(round(step * 2))
+    if k > 1 and len(seg) >= k:
+        seg = seg[: len(seg) // k * k].reshape(-1, k).max(axis=1)
+    return jsonify({"step": k / 2, "start": a, "v": [int(x) for x in seg]})
+
+
+@app.route("/api/project/<pid>/src")
+def api_src(pid):
+    p = load(pid)
+    return send_file(p["src_path"], conditional=True)
+
+
+@app.route("/api/project/<pid>/editcam", methods=["POST"])
+def api_editcam(pid):
+    p = load(pid)
+    cam = request.json.get("cam")
+    if cam:
+        cam = render.clamp_rect(cam, p["info"])
+    update(pid, edit_cam=cam)
+    return jsonify({"ok": True, "cam": cam})
+
+
+@app.route("/api/project/<pid>/edit/analyze", methods=["POST"])
+def api_edit_analyze(pid):
+    opts = request.json or {}
+    return jsonify({"ok": start_job(pid, "edit_analyze", lambda: job_edit_analyze(pid, opts))})
+
+
+@app.route("/api/project/<pid>/edit/save", methods=["POST"])
+def api_edit_save(pid):
+    d = request.json or {}
+    with LOCK:
+        p = load(pid); ed = p.get("edit") or {}
+        rs, re_ = ed.get("range") or p.get("range")
+        keep = sorted([[max(rs, float(a)), min(re_, float(b))] for a, b in d.get("keep", []) if float(b) - float(a) > 0.05])
+        zooms = [{"id": int(z.get("id", i + 1)), "s": float(z["s"]), "e": float(z["e"]), "lv": int(z.get("lv", 1))}
+                 for i, z in enumerate(d.get("zooms", [])) if float(z["e"]) - float(z["s"]) > 0.2]
+        ed.update(keep=keep, zooms=zooms)
+        for k in ("zoom", "blur", "out"):
+            if k in d:
+                ed[k] = d[k]
+        ed["report"] = autoedit.report(ed)
+        p["edit"] = ed; save(p)
+    return jsonify({"ok": True, "report": ed["report"]})
+
+
+@app.route("/api/project/<pid>/edit/preview", methods=["POST"])
+def api_edit_preview(pid):
+    t0 = float((request.json or {}).get("t", 0))
+    return jsonify({"ok": start_job(pid, "edit_preview", lambda: job_edit_preview(pid, t0))})
+
+
+@app.route("/api/project/<pid>/edit/export", methods=["POST"])
+def api_edit_export(pid):
+    d = request.json or {}
+    return jsonify({"ok": start_job(pid, "edit_export", lambda: job_edit_export(pid, d.get("premiere", True), d.get("mp4", False)))})
+
+
+@app.route("/api/project/<pid>/status", methods=["POST"])
+def api_status(pid):
+    update(pid, status=(request.json or {}).get("status", "choose"))
+    return jsonify({"ok": True})
 
 
 @app.route("/")
@@ -431,8 +547,6 @@ def api_get(pid):
     p = load(pid)
     for c in p.get("clips", []):
         c.pop("words", None)
-    if p.get("autoedit"):
-        p["autoedit"] = {k: v for k, v in p["autoedit"].items() if k != "pieces"}
     return jsonify(p)
 
 

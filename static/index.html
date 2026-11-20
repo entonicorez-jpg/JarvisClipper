@@ -100,11 +100,77 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
 .big{position:fixed;inset:0;background:#000d;display:none;place-items:center;z-index:60}
 .big.on{display:grid}
 .big video{height:92vh;border-radius:16px;background:#000}
+
+/* ---------- passi ---------- */
+.steps{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--mut)}
+.steps span{padding:5px 10px;border-radius:20px;border:1px solid transparent}
+.steps span.on{color:var(--acc);border-color:#2f6d1f;background:#0f2414}
+.steps span.past{color:var(--txt)}
+.view{animation:fade .25s ease}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.vtitle{display:flex;align-items:end;gap:14px;margin:4px 0 16px}
+.vtitle h2{margin:0;font-size:24px;letter-spacing:-.01em}
+.vtitle p{margin:0;color:var(--mut)}
+.vtitle .sp{flex:1}
+/* ---------- scegli parte ---------- */
+.player{position:relative;background:#000;border-radius:14px;overflow:hidden;aspect-ratio:16/9;max-width:min(100%,calc(52vh*16/9));margin:0 auto}
+.player video{width:100%;height:100%;display:block;background:#000}
+.tl{position:relative;margin-top:14px;background:#0e1115;border:1px solid var(--line);border-radius:12px;overflow:hidden;user-select:none}
+.tl canvas{display:block;width:100%}
+.rangeinfo{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:14px}
+.rangeinfo input{width:120px;font-family:Consolas,monospace;text-align:center}
+.pill{background:#0e1115;border:1px solid var(--line);border-radius:12px;padding:8px 14px}
+.pill small{display:block;color:var(--mut);font-size:11px}
+.pill b{font-size:16px}
+.hint{color:var(--mut);font-size:12px}
+/* ---------- scegli modalità ---------- */
+.modes{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:10px}
+.mode{background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:30px;cursor:pointer;transition:.2s;position:relative;overflow:hidden}
+.mode:hover{border-color:var(--acc);transform:translateY(-3px);box-shadow:0 18px 40px #0008}
+.mode .ic{font-size:44px;line-height:1}
+.mode h3{font-size:24px;margin:14px 0 8px}
+.mode p{color:var(--mut);margin:0 0 14px;font-size:14.5px}
+.mode ul{margin:0;padding-left:18px;color:#c5ccd6;font-size:13.5px;line-height:1.8}
+.mode .go{margin-top:20px;display:inline-block;color:var(--acc);font-weight:700}
+.mode.b:hover{border-color:var(--acc2)} .mode.b .go{color:var(--acc2)}
+/* ---------- editor ---------- */
+.ed{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;align-items:start}
+.screen{position:relative;background:#000;border-radius:14px;overflow:hidden;aspect-ratio:16/9;max-width:min(100%,calc(50vh*16/9));margin:0 auto}
+.screen video{position:absolute;inset:0;width:100%;height:100%;transform-origin:0 0;will-change:transform,filter}
+.screen .badge{position:absolute;left:12px;top:12px;background:#000a;border:1px solid #fff2;border-radius:8px;padding:4px 10px;font-size:12px;font-weight:700;pointer-events:none}
+.transport{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
+.transport .tc{font:13px Consolas,monospace;color:var(--mut)}
+.transport .tc b{color:var(--txt)}
+.etl{margin-top:10px;background:#0e1115;border:1px solid var(--line);border-radius:12px;overflow:hidden;position:relative;user-select:none}
+.etl canvas{display:block;width:100%}
+.zoombar{display:flex;align-items:center;gap:8px;margin-top:8px;color:var(--mut);font-size:12px;white-space:nowrap}.zoombar .hint{white-space:normal}
+.zoombar input[type=range]{flex:0 0 160px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+.panel h4{margin:0 0 10px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--mut)}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stat{background:#0e1115;border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.stat small{display:block;color:var(--mut);font-size:11px}
+.stat b{font-size:17px}
+.insp .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.big2{width:100%;padding:12px;font-size:15px;margin-top:8px}
+.kbd{display:inline-block;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:0 5px;font:11px Consolas,monospace;color:var(--txt)}
+.camstage{position:relative;background:#000;border-radius:12px;overflow:hidden;user-select:none}
+.camstage img{width:100%;display:block}
+.camstage canvas{position:absolute;inset:0;width:100%;height:100%;cursor:move}
+.setup{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:22px;align-items:start}
+.field{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--mut);margin-bottom:12px}
+.field select{width:100%}
+.tog{display:flex;align-items:center;gap:10px;margin:10px 0;color:var(--txt)}
+.tog input{width:18px;height:18px;accent-color:var(--acc)}
+.prevmodal video{max-width:92vw;max-height:80vh;border-radius:14px;background:#000}
 </style>
 </head>
 <body>
 <header>
   <div class="logo">JAR<b>V</b>IS CLIPPER<small>VIRAL CLIP FINDER</small></div>
+  <div class="steps hidden" id="steps">
+    <span data-s="vod">1 · VOD</span>›<span data-s="range">2 · Parte</span>›<span data-s="choose">3 · Cosa fare</span>›<span data-s="work">4 · Lavoro</span>
+  </div>
   <div class="sp"></div>
   <button id="homeBtn" class="hidden" onclick="goHome()">← Nuovo VOD</button>
   <button onclick="openCfg()">⚙ Impostazioni</button>
@@ -136,66 +202,147 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
       <div class="bar"><i id="jbar"></i></div>
       <div class="log" id="jlog"></div>
     </div>
-
     <div class="done" id="done"></div>
 
-    <div class="sec" id="laySec">
-      <h2><span class="n">1</span> Dove sono cam e gioco</h2>
-      <div class="lay">
-        <div>
-          <div class="stage" id="stage"><img id="frame" alt=""><canvas id="ov"></canvas></div>
-          <div class="thumbs" id="thumbs"></div>
-          <div class="legend"><span><i style="background:var(--hot)"></i>CAM (va sopra)</span><span><i style="background:var(--acc)"></i>GIOCO (va sotto)</span><span>Trascina per spostare · angolo in basso a destra per ridimensionare</span></div>
-          <div class="ctl">
-            <div class="seg" id="modeSeg">
-              <button data-m="split" class="on">Cam sopra + gioco sotto</button>
-              <button data-m="full">Solo gioco</button>
+    <!-- 2: SCEGLI LA PARTE -->
+    <div class="view hidden" id="vRange">
+      <div class="vtitle"><div><h2>Quale parte del VOD vuoi usare?</h2>
+        <p>Trascina le maniglie verdi sulla timeline (o usa "Inizio qui / Fine qui" mentre guardi). Rotellina = zoom sulla timeline.</p></div>
+        <div class="sp"></div><button class="pri" onclick="rangeNext()">Avanti →</button></div>
+      <div class="player"><video id="rv" controls preload="metadata"></video></div>
+      <div class="tl" id="rtlBox"><canvas id="rtl" height="130"></canvas></div>
+      <div class="rangeinfo">
+        <div class="pill"><small>Inizio</small><input type="text" id="rStart" onchange="rangeTyped()"></div>
+        <div class="pill"><small>Fine</small><input type="text" id="rEnd" onchange="rangeTyped()"></div>
+        <div class="pill"><small>Durata scelta</small><b id="rDur">–</b></div>
+        <button onclick="rangeSetHere('s')">⏮ Inizio qui</button>
+        <button onclick="rangeSetHere('e')">Fine qui ⏭</button>
+        <button onclick="rangeAll()">Tutto il VOD</button>
+        <div style="flex:1"></div>
+        <span class="hint">Le parti più chiare sulla timeline sono i momenti con più volume.</span>
+      </div>
+    </div>
+
+    <!-- 3: COSA VUOI FARE -->
+    <div class="view hidden" id="vChoose">
+      <div class="vtitle"><div><h2>Cosa vuoi fare con questa parte?</h2><p id="chooseInfo"></p></div>
+        <div class="sp"></div><button onclick="goStatus('range')">← Cambia parte</button></div>
+      <div class="modes">
+        <div class="mode" onclick="goStatus('clips_setup')">
+          <div class="ic">🔥</div><h3>Clip virali</h3>
+          <p>Trova i momenti più divertenti e li trasforma in short verticali.</p>
+          <ul><li>Punteggio di viralità 0–100 con i motivi</li><li>Cam sopra, gioco sotto (scegli tu i riquadri)</li><li>Anteprime, MP4 verticali ed export per Premiere</li></ul>
+          <span class="go">Trova le clip →</span>
+        </div>
+        <div class="mode b" onclick="goStatus('edit_setup')">
+          <div class="ic">✂️</div><h3>Taglia e aggiungi zoom</h3>
+          <p>Montaggio automatico del video orizzontale, da sistemare in una timeline.</p>
+          <ul><li>Taglia i silenzi da solo</li><li>Zoom veloci sulla cam con motion blur quando reagisci</li><li>Timeline modificabile, poi Premiere o video pronto</li></ul>
+          <span class="go">Monta il video →</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4a: CLIP VIRALI -->
+    <div class="view hidden" id="vClips">
+      <div class="vtitle"><div><h2>🔥 Clip virali</h2><p id="clipsInfo"></p></div><div class="sp"></div><button onclick="goStatus('choose')">← Indietro</button></div>
+      <div class="sec" id="laySec">
+        <h2><span class="n">1</span> Dove sono cam e gioco</h2>
+        <div class="lay">
+          <div>
+            <div class="stage" id="stage"><img id="frame" alt=""><canvas id="ov"></canvas></div>
+            <div class="thumbs" id="thumbs"></div>
+            <div class="legend"><span><i style="background:var(--hot)"></i>CAM (va sopra)</span><span><i style="background:var(--acc)"></i>GIOCO (va sotto)</span><span>Trascina per spostare · angolo in basso a destra per ridimensionare</span></div>
+            <div class="ctl">
+              <div class="seg" id="modeSeg"><button data-m="split" class="on">Cam sopra + gioco sotto</button><button data-m="full">Solo gioco</button></div>
+              <label id="splitLbl">Altezza cam <input type="range" id="split" min="25" max="55" step="1" value="40"> <span id="splitV">40%</span></label>
+              <button class="sm" onclick="autoCam()">🎯 Trova la cam da solo</button>
             </div>
-            <label id="splitLbl">Altezza cam <input type="range" id="split" min="25" max="55" step="1" value="40"> <span id="splitV">40%</span></label>
-            <button class="sm" onclick="autoCam()">🎯 Trova la cam da solo</button>
+          </div>
+          <div class="side">
+            <div class="phone"><canvas id="ph" width="540" height="960"></canvas></div>
+            <button onclick="saveLayout(true)" id="relayBtn" class="hidden">Applica layout alle anteprime</button>
           </div>
         </div>
-        <div class="side">
-          <div class="phone"><canvas id="ph" width="540" height="960"></canvas></div>
-          <button onclick="saveLayout(true)" id="relayBtn" class="hidden">Applica layout alle anteprime</button>
+        <div class="opts" id="opts">
+          <label>Quante clip <input type="number" id="oN" min="3" max="50" value="15" style="width:90px"></label>
+          <label>Precisione parlato
+            <select id="oModel"><option value="base">Veloce</option><option value="small" selected>Bilanciata</option><option value="medium">Massima (lenta)</option></select></label>
+          <label>Durata max (s) <input type="number" id="oMax" min="15" max="180" value="59" style="width:90px"></label>
+          <label>Durata min (s) <input type="number" id="oMin" min="5" max="60" value="15" style="width:90px"></label>
+          <div style="flex:1"></div>
+          <button class="pri" id="anBtn" onclick="startAnalyze()">🔎 Trova le clip virali</button>
         </div>
       </div>
-      <div class="opts" id="opts">
-        <label>Quante clip <input type="number" id="oN" min="3" max="50" value="15" style="width:90px"></label>
-        <label>Precisione parlato
-          <select id="oModel"><option value="base">Veloce</option><option value="small" selected>Bilanciata</option><option value="medium">Massima (lenta)</option></select></label>
-        <label>Durata max (s) <input type="number" id="oMax" min="15" max="180" value="59" style="width:90px"></label>
-        <label>Durata min (s) <input type="number" id="oMin" min="5" max="60" value="15" style="width:90px"></label>
-        <div style="flex:1"></div>
-        <button class="pri" id="anBtn" onclick="startAnalyze()">🔎 Trova le clip virali</button>
+      <div class="sec hidden" id="clipSec">
+        <h2><span class="n">2</span> Clip trovate <span style="flex:1"></span><span id="sortInfo" style="letter-spacing:0;text-transform:none;font-weight:400"></span></h2>
+        <div class="clips" id="clips"></div>
       </div>
     </div>
 
-    <div class="sec hidden" id="aeSec">
-      <h2><span class="n">✂</span> Montaggio automatico · video orizzontale</h2>
-      <div style="color:var(--mut);margin:-4px 0 14px">Taglia i silenzi e, quando reagisci forte, zooma sulla tua cam (riquadro <b style="color:var(--hot)">rosso</b> qui sopra). Le reazioni più forti mettono la cam quasi a tutto schermo.</div>
-      <div class="opts" style="border:0;margin:0;padding:0">
-        <label>Ritmo dei tagli <select id="aeRitmo"><option value="tranquillo">Tranquillo</option><option value="normale" selected>Normale</option><option value="veloce">Veloce</option></select></label>
-        <label>Zoom <select id="aeZoom"><option value="leggero">Leggero (118%)</option><option value="normale" selected>Normale (132%)</option><option value="forte">Forte (150%)</option></select></label>
-        <label>Quante reazioni <select id="aeSens"><option value="0.8">Solo le più forti</option><option value="1" selected>Normale</option><option value="1.25">Tante</option></select></label>
-        <label style="flex-direction:row;align-items:center;gap:8px;margin-bottom:10px"><input type="checkbox" id="aeFull" checked style="accent-color:var(--acc)"> cam a tutto schermo sulle reazioni più forti</label>
-        <div style="flex:1"></div>
-        <button class="pri" id="aeBtn" onclick="startAE()">✂️ Monta il video</button>
-      </div>
-      <div id="aeRes" class="hidden" style="display:grid;grid-template-columns:minmax(0,640px) 1fr;gap:22px;margin-top:18px;align-items:start">
-        <video id="aeVid" controls style="width:100%;aspect-ratio:16/9;background:#000;border-radius:12px"></video>
+    <!-- 4b: TAGLIA + ZOOM: IMPOSTAZIONI -->
+    <div class="view hidden" id="vEditSetup">
+      <div class="vtitle"><div><h2>✂️ Taglia e aggiungi zoom</h2><p>Metti il riquadro rosso sulla tua cam: gli zoom andranno lì.</p></div>
+        <div class="sp"></div><button onclick="goStatus('choose')">← Indietro</button>
+        <button id="backEditorBtn" class="hidden" onclick="goStatus('editor')">Torna all'editor →</button></div>
+      <div class="setup">
         <div>
-          <div id="aeRep" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"></div>
-          <div style="color:var(--mut);font-size:12px;margin:12px 0">L'anteprima mostra ~45 secondi a partire dal primo zoom. Nell'XML per Premiere ogni zoom è un effetto Movimento (scala e posizione) che puoi ritoccare; le clip zoomate si chiamano [ZOOM CAM] e [CAM PIENA].</div>
-          <label style="display:flex;gap:8px;align-items:center;color:var(--mut);margin-bottom:10px"><input type="checkbox" id="aeMp4" checked style="accent-color:var(--acc)"> crea anche l'MP4 già montato</label>
-          <button class="pri" onclick="exportAE()">⬇ Esporta montaggio</button> <button onclick="openFolder()">📂 Cartella</button>
+          <div class="camstage"><img id="cframe" alt=""><canvas id="cov"></canvas></div>
+          <div class="thumbs" id="cthumbs"></div>
+          <div class="ctl"><button class="sm" onclick="autoCamEdit()">🎯 Trova la cam da solo</button>
+            <span class="hint">Trascina il riquadro per spostarlo, l'angolo in basso a destra per ridimensionarlo.</span></div>
+        </div>
+        <div class="panel">
+          <h4>Come lo voglio</h4>
+          <label class="field">Ritmo dei tagli <select id="eRitmo"><option value="tranquillo">Tranquillo (taglia solo le pause lunghe)</option><option value="normale" selected>Normale</option><option value="veloce">Veloce (stile YouTube serrato)</option></select></label>
+          <label class="field">Forza dello zoom <select id="eZoom"><option value="leggero">Leggero · 118%</option><option value="normale" selected>Normale · 132%</option><option value="forte">Forte · 150%</option></select></label>
+          <label class="field">Quanti zoom <select id="eSens"><option value="0.8">Solo le reazioni più forti</option><option value="1" selected>Normale</option><option value="1.25">Tanti</option></select></label>
+          <label class="tog"><input type="checkbox" id="eFull" checked> Cam quasi a tutto schermo sulle reazioni più forti</label>
+          <label class="tog"><input type="checkbox" id="eBlur" checked> Motion blur quando lo zoom entra</label>
+          <label class="tog"><input type="checkbox" id="eOutBlur" checked> Anche l'uscita animata (se no: stacco netto)</label>
+          <label class="tog"><input type="checkbox" id="eNoCam"> Non c'è la cam (solo tagli)</label>
+          <button class="pri big2" id="eGo" onclick="startEdit()">✂️ Analizza e apri l'editor</button>
+          <div class="hint" style="margin-top:8px">Puoi cambiare tutto dopo nella timeline.</div>
         </div>
       </div>
     </div>
 
-    <div class="sec hidden" id="clipSec">
-      <h2><span class="n">2</span> Clip trovate <span style="flex:1"></span><span id="sortInfo" style="letter-spacing:0;text-transform:none;font-weight:400"></span></h2>
-      <div class="clips" id="clips"></div>
+    <!-- 4b: EDITOR -->
+    <div class="view hidden" id="vEditor">
+      <div class="vtitle"><div><h2>✂️ Editor</h2><p>Sistema tagli e zoom, poi esporta. <span class="kbd">Spazio</span> play · <span class="kbd">Z</span> zoom qui · <span class="kbd">S</span> spezza · <span class="kbd">Canc</span> elimina · <span class="kbd">Ctrl+Z</span> annulla</p></div>
+        <div class="sp"></div><button onclick="goStatus('edit_setup')">⚙ Cam e opzioni</button><button onclick="goStatus('choose')">← Indietro</button></div>
+      <div class="ed">
+        <div>
+          <div class="screen" id="screen"><video id="ev" preload="auto"></video><div class="badge" id="ebadge">MONTATO</div></div>
+          <div class="transport">
+            <button class="pri" id="ePlay" onclick="edToggle()">▶ Play</button>
+            <div class="seg" id="ePrevSeg"><button data-m="1" class="on">Montato</button><button data-m="0">Originale</button></div>
+            <span class="tc" id="eTc"></span>
+            <div style="flex:1"></div>
+            <button onclick="edAddZoom()">🔍 + Zoom qui</button>
+            <button onclick="edSplit()">✂ Spezza qui</button>
+            <button onclick="edUndo()" title="Ctrl+Z">↶</button><button onclick="edRedo()" title="Ctrl+Y">↷</button>
+          </div>
+          <div class="etl" id="etlBox"><canvas id="etl" height="190"></canvas></div>
+          <div class="zoombar">🔎 Zoom timeline <input type="range" id="eZoomTl" min="0" max="100" value="0"> <span class="hint">Rotellina = zoom · Shift+rotellina = scorri · trascina gli zoom per spostarli, i bordi per allungarli · doppio clic sulla corsia ZOOM per aggiungerne uno</span></div>
+        </div>
+        <div>
+          <div class="panel"><h4>Risultato</h4><div class="stats" id="eStats"></div></div>
+          <div class="panel insp" id="eInsp"><h4>Selezione</h4><div class="hint">Clicca un pezzo o uno zoom nella timeline.</div></div>
+          <div class="panel"><h4>Stile zoom</h4>
+            <label class="field">Forza <select id="eZoom2" onchange="edSetStyle()"><option value="1.18">Leggero · 118%</option><option value="1.32">Normale · 132%</option><option value="1.5">Forte · 150%</option></select></label>
+            <label class="tog"><input type="checkbox" id="eBlur2" onchange="edSetStyle()"> Motion blur in entrata</label>
+            <label class="tog"><input type="checkbox" id="eOut2" onchange="edSetStyle()"> Uscita animata</label>
+            <button class="big2" onclick="edTruePreview()">🎬 Anteprima vera di 30 s da qui</button>
+            <div class="hint">Nel player vedi già tagli e zoom dal vivo; l'anteprima vera mostra il motion blur definitivo.</div>
+          </div>
+          <div class="panel"><h4>Esporta</h4>
+            <button class="pri big2" onclick="edExport(true,false)">📤 Esporta su Premiere</button>
+            <button class="big2" onclick="edExport(false,true)">⬇ Scarica il video montato</button>
+            <button class="big2" onclick="openFolder()">📂 Apri cartella</button>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 </main>
@@ -229,37 +376,74 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
 </div></div>
 
 <div class="big" id="big" onclick="closeBig(event)"><video id="bigv" controls autoplay></video></div>
+<div class="modal prevmodal" id="prevModal" onclick="if(event.target.id==='prevModal'){this.classList.remove('on');$('#prevV').pause()}"><video id="prevV" controls autoplay></video></div>
 
 <script>
 const $=s=>document.querySelector(s);
-let P=null, PID=null, poll=null, L=null, curFrame=0, drag=null, layDirty=false;
+let P=null, PID=null, poll=null, L=null, curFrame=0, drag=null, layDirty=false, VIEW=null;
 const api=(u,b)=>fetch(u,b===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>r.json());
 const tc=s=>{s=Math.max(0,s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=(s%60).toFixed(1).padStart(4,'0');return (h?h+':'+String(m).padStart(2,'0'):m)+':'+x};
+const tcs=s=>tc(s).split('.')[0];
+function parseTc(str){const p=String(str).trim().split(':').map(Number);if(p.some(isNaN))return null;let t=0;for(const v of p)t=t*60+v;return t}
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 
 /* ---------- home ---------- */
 async function loadRecent(){
   const r=await api('/api/projects');
   $('#recent').innerHTML=r.length?r.map(p=>`<div class="rcard" onclick="openProject('${p.id}')">
-    ${p.frame?`<img src="/p/${p.id}/${p.frame}">`:'<img>'}<div><b>${esc(p.name||p.id)}</b><br><small>${p.n?p.n+' clip':p.status}</small></div></div>`).join(''):'<div class="empty">Nessun progetto ancora.</div>';
+    ${p.frame?`<img src="/p/${p.id}/${p.frame}">`:'<img>'}<div><b>${esc(p.name||p.id)}</b><br><small>${p.n?p.n+' clip':({range:'da scegliere la parte',choose:'pronto',editor:'montaggio in corso',edit_setup:'montaggio'}[p.status]||p.status)}</small></div></div>`).join(''):'<div class="empty">Nessun progetto ancora.</div>';
 }
 async function pickFile(){const r=await api('/api/pick_file');if(r.path)$('#src').value=r.path}
 async function newProject(){
   const s=$('#src').value.trim(); if(!s) return alert('Incolla un link di Kick o scegli un file');
   const b=$('#goBtn');b.disabled=true;b.textContent='⏳';
   try{const r=await api('/api/project/new',{source:s}); if(r.error) return alert(r.error); openProject(r.id);}
-  catch(e){alert('Jarvis non risponde: la finestra nera è ancora aperta?')}
+  catch(e){alert('Jarvis non risponde: riavvia l\'app')}
   finally{b.disabled=false;b.textContent='Vai →'}
 }
 $('#src').addEventListener('keydown',e=>{if(e.key==='Enter')newProject()});
-function goHome(){clearInterval(poll);PID=null;P=null;$('#proj').classList.add('hidden');$('#home').classList.remove('hidden');$('#homeBtn').classList.add('hidden');$('#foot').classList.add('hidden');loadRecent()}
-function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function goHome(){clearInterval(poll);PID=null;P=null;VIEW=null;edUnload();
+  document.querySelectorAll('.view').forEach(v=>v.classList.add('hidden'));
+  $('#proj').classList.add('hidden');$('#home').classList.remove('hidden');$('#homeBtn').classList.add('hidden');$('#foot').classList.add('hidden');$('#steps').classList.add('hidden');loadRecent()}
 
-/* ---------- progetto ---------- */
+/* ---------- progetto e navigazione ---------- */
 function openProject(id){
-  PID=id;L=null;$('#home').classList.add('hidden');$('#proj').classList.remove('hidden');$('#homeBtn').classList.remove('hidden');
+  PID=id;L=null;VIEW=null;R=null;CE=null;$('#home').classList.add('hidden');$('#proj').classList.remove('hidden');$('#homeBtn').classList.remove('hidden');
   $('#done').style.display='none';refresh();clearInterval(poll);poll=setInterval(refresh,1200);
 }
-let lastClipsSig='';
+function viewFor(st){
+  if(['range'].includes(st))return 'vRange';
+  if(st==='choose')return 'vChoose';
+  if(['clips_setup','layout','analyzing','clips'].includes(st))return 'vClips';
+  if(st==='edit_setup')return 'vEditSetup';
+  if(st==='editor')return 'vEditor';
+  return null; // preparazione
+}
+async function goStatus(st){
+  if(st==='editor'&&!(P&&P.edit))st='edit_setup';
+  await api(`/api/project/${PID}/status`,{status:st});P.status=st;showView(viewFor(st));
+}
+function showView(v){
+  if(v===VIEW)return;
+  if(VIEW==='vEditor')edUnload();
+  if(VIEW==='vRange')rangeUnload();
+  VIEW=v;
+  document.querySelectorAll('.view').forEach(x=>x.classList.toggle('hidden',x.id!==v));
+  $('#done').style.display='none';
+  const stepOf={vRange:'range',vChoose:'choose',vClips:'work',vEditSetup:'work',vEditor:'work'}[v]||'vod';
+  const order=['vod','range','choose','work'];
+  $('#steps').classList.remove('hidden');
+  document.querySelectorAll('#steps span').forEach(s=>{const i=order.indexOf(s.dataset.s),k=order.indexOf(stepOf);s.className=i===k?'on':(i<k?'past':'')});
+  $('#foot').classList.toggle('hidden',!(v==='vClips'&&(P.clips||[]).length));
+  if(v==='vRange')rangeInit();
+  if(v==='vChoose'){const r=P.range||[0,P.info.dur];$('#chooseInfo').textContent=`Parte scelta: ${tcs(r[0])} → ${tcs(r[1])} (${tcs(r[1]-r[0])})`}
+  if(v==='vClips'){if(!L){L=JSON.parse(JSON.stringify(P.layout));}setupLayout();const r=P.range||[0,P.info.dur];$('#clipsInfo').textContent=`Cerco nella parte ${tcs(r[0])} → ${tcs(r[1])}`;lastClipsSig=''}
+  if(v==='vEditSetup')camEditInit();
+  if(v==='vEditor')edLoad();
+  window.scrollTo({top:0});
+}
+let lastClipsSig='', lastJobKey='';
 async function refresh(){
   if(!PID) return;
   const p=await api('/api/project/'+PID); P=p;
@@ -268,29 +452,99 @@ async function refresh(){
   $('#jbar').style.width=((j.progress||0)*100)+'%';
   $('#stopBtn').style.display=j.running?'':'none';
   $('#jlog').textContent=(j.log||[]).join('\n');
-  $('#anBtn').disabled=!!j.running||!p.info;
-  if(p.info && !L){L=JSON.parse(JSON.stringify(p.layout));setupLayout()}
-  $('#laySec').classList.toggle('hidden',!p.info);
-  const hasClips=(p.clips||[]).length>0;
-  $('#clipSec').classList.toggle('hidden',!hasClips);
-  $('#foot').classList.toggle('hidden',!hasClips);
-  $('#relayBtn').classList.toggle('hidden',!hasClips);
-  if(hasClips){$('#anBtn').textContent='🔁 Rianalizza'}
-  $('#aeSec').classList.toggle('hidden',!p.info);$('#aeBtn').disabled=!!j.running;
-  const ae=p.autoedit;
-  if(ae&&ae.preview){$('#aeRes').classList.remove('hidden');const u=`/p/${PID}/${ae.preview}`;if(!$('#aeVid').src.endsWith(u))$('#aeVid').src=u;
-    const r=ae.report,box=(k,v)=>`<div class="chip" style="border-radius:12px;padding:10px 12px"><div style="color:var(--mut);font-size:11px">${k}</div><b style="font-size:18px">${v}</b></div>`;
-    $('#aeRep').innerHTML=box('Prima',tc(r.durata_originale).split('.')[0])+box('Dopo',tc(r.durata_finale).split('.')[0])+box('Tagli',r.tagli)+box('Zoom cam',r.zoom)+box('Cam a tutto schermo',r.cam_piena)+box('Tolti',Math.round(r.tagliato)+' s');}
-  else $('#aeRes').classList.add('hidden');
-  if(p.last_autoedit&&j.name==='autoedit_export'&&!j.running&&!j.error){const d=$('#done');d.style.display='block';
-    d.innerHTML=`✅ <b>Montaggio esportato.</b> In Premiere: <b>File › Importa</b> e scegli <code>${esc(p.last_autoedit.xml.split(/[\\/]/).pop())}</code>${p.last_autoedit.mp4?' · trovi anche l\'MP4 già montato nella stessa cartella':''}. <button class="sm" onclick="openFolder()">Apri cartella</button>`}
-  const sig=JSON.stringify((p.clips||[]).map(c=>[c.id,c.preview,c.start,c.end,c.score,c.selected,c.title]));
-  if(sig!==lastClipsSig){lastClipsSig=sig;drawClips()}
-  if(p.last_export&&j.name==='export'&&!j.running&&!j.error) showDone(p.last_export);
+  $('#jobbar').classList.toggle('hidden',!j.running&&!j.error&&!!viewFor(p.status));
+  showView(viewFor(p.status));
+  const key=(j.name||'')+(j.running?'1':'0');
+  const justDone=lastJobKey&&lastJobKey.endsWith('1')&&key.endsWith('0')&&lastJobKey.slice(0,-1)===j.name&&!j.error;
+  lastJobKey=key;
+  if(VIEW==='vClips'){
+    $('#anBtn').disabled=!!j.running;
+    const hasClips=(p.clips||[]).length>0;
+    $('#clipSec').classList.toggle('hidden',!hasClips);$('#foot').classList.toggle('hidden',!hasClips);$('#relayBtn').classList.toggle('hidden',!hasClips);
+    if(hasClips)$('#anBtn').textContent='🔁 Rianalizza';
+    const sig=JSON.stringify((p.clips||[]).map(c=>[c.id,c.preview,c.start,c.end,c.score,c.selected,c.title]));
+    if(sig!==lastClipsSig){lastClipsSig=sig;drawClips()}
+    if(p.last_export&&j.name==='export'&&!j.running&&!j.error) showDone(p.last_export);
+  }
+  if(VIEW==='vEditSetup'){$('#eGo').disabled=!!j.running;$('#backEditorBtn').classList.toggle('hidden',!p.edit)}
+  if(VIEW==='vRange'&&p.strip&&R&&!R.stripImg)rangeInit(true);
+  if(justDone&&j.name==='edit_preview'&&p.edit_preview){const v=$('#prevV');v.src=`/p/${PID}/${p.edit_preview}`;$('#prevModal').classList.add('on')}
+  if(justDone&&j.name==='edit_export'&&p.last_edit_export){const e=p.last_edit_export,d=$('#done');d.style.display='block';
+    d.innerHTML=`✅ <b>Esportato.</b> ${e.xml?`In Premiere: <b>File › Importa</b> e scegli <code>${esc(e.xml.split(/[\\/]/).pop())}</code> · V1 = tagli e zoom (Movimento modificabile), V2 = entrate degli zoom con motion blur. `:''}${e.mp4?`Video pronto: <code>${esc(e.mp4.split(/[\\/]/).pop())}</code>. `:''}<button class="sm" onclick="openFolder()">Apri cartella</button>`;window.scrollTo({top:0,behavior:'smooth'})}
 }
 function toggleLog(){const l=$('#jlog');l.style.display=l.style.display==='block'?'none':'block'}
 async function stopJob(){await api(`/api/project/${PID}/stop`,{})}
+async function openFolder(){await api(`/api/project/${PID}/open`,{})}
 
+/* ---------- timeline generica (zoom con rotellina, scorrimento) ---------- */
+class TL{
+  constructor(canvas,t0,t1){this.c=canvas;this.min=t0;this.max=t1;this.a=t0;this.b=t1;this.dpr=devicePixelRatio||1}
+  resize(){const w=this.c.clientWidth;this.c.width=w*this.dpr;this.c.height=this.c.getAttribute('height')*this.dpr;this.W=w;this.H=+this.c.getAttribute('height')}
+  x(t){return (t-this.a)/(this.b-this.a)*this.W}
+  t(x){return this.a+x/this.W*(this.b-this.a)}
+  zoomAt(x,f){const t=this.t(x),span=clamp((this.b-this.a)*f,Math.min(4,this.max-this.min),this.max-this.min);
+    let a=t-(x/this.W)*span;a=clamp(a,this.min,this.max-span);this.a=a;this.b=a+span}
+  pan(dt){const span=this.b-this.a;this.a=clamp(this.a+dt,this.min,this.max-span);this.b=this.a+span}
+  follow(t){const span=this.b-this.a;if(t<this.a||t>this.b-span*0.05){this.a=clamp(t-span*0.15,this.min,this.max-span);this.b=this.a+span}}
+  ctx(){const x=this.c.getContext('2d');x.setTransform(this.dpr,0,0,this.dpr,0,0);return x}
+  ruler(x,y,h){const span=this.b-this.a,steps=[1,2,5,10,15,30,60,120,300,600,900,1800,3600];
+    const st=steps.find(s=>span/s<=this.W/70)||3600;
+    x.fillStyle='#0b0d10';x.fillRect(0,y,this.W,h);x.fillStyle='#6b7380';x.font='10px Segoe UI';x.strokeStyle='#262b34';
+    for(let t=Math.ceil(this.a/st)*st;t<=this.b;t+=st){const px=this.x(t);x.fillRect(px,y+h-6,1,6);x.fillText(tcs(t),px+3,y+h-8)}}
+}
+
+/* ---------- 2: scegli la parte ---------- */
+let R=null, rdrag=null;
+function rangeInit(force){
+  const box=$('#rtl'), v=$('#rv');
+  if(R&&!force)return;
+  const dur=P.info.dur, r=P.range||[0,dur];
+  if(!R){R={s:r[0],e:r[1],tl:new TL(box,0,dur),energy:null,stripImg:null};v.src=`/api/project/${PID}/src`;
+    api(`/api/project/${PID}/energy?start=0&end=${dur}&step=${Math.max(0.5,dur/1500).toFixed(1)}`).then(d=>{R.energy=d;rangeDraw()});
+    v.ontimeupdate=()=>rangeDraw();
+    new ResizeObserver(()=>rangeDraw()).observe($('#rtlBox'));
+    box.onwheel=e=>{e.preventDefault();if(e.shiftKey)R.tl.pan((R.tl.b-R.tl.a)*e.deltaY/1000);else R.tl.zoomAt(e.offsetX,e.deltaY>0?1.25:0.8);rangeDraw()};
+    box.onmousedown=e=>{const t=R.tl.t(e.offsetX),hx=8*(R.tl.b-R.tl.a)/R.tl.W;
+      if(Math.abs(t-R.s)<hx)rdrag='s';else if(Math.abs(t-R.e)<hx)rdrag='e';
+      else if(t>R.s&&t<R.e&&e.offsetY>R.tl.H-30){rdrag={move:t,s:R.s,e:R.e}}
+      else{v.currentTime=t;rdrag='seek'}};
+    window.addEventListener('mousemove',e=>{if(!rdrag||!R)return;const b=box.getBoundingClientRect(),t=clamp(R.tl.t(e.clientX-b.left),0,dur);
+      if(rdrag==='s')R.s=Math.min(t,R.e-5);else if(rdrag==='e')R.e=Math.max(t,R.s+5);
+      else if(rdrag==='seek')v.currentTime=t;
+      else if(rdrag.move!=null){const d=t-rdrag.move,len=rdrag.e-rdrag.s;R.s=clamp(rdrag.s+d,0,dur-len);R.e=R.s+len}
+      rangeDraw()});
+    window.addEventListener('mouseup',()=>{if(rdrag&&R&&rdrag!=='seek'&&VIEW==='vRange'){v.currentTime=rdrag==='e'?R.e:R.s}rdrag=null});
+  }
+  if(P.strip&&!R.stripImg){const im=new Image();im.onload=()=>{R.stripImg=im;rangeDraw()};im.src=`/p/${PID}/${P.strip.file}?v=1`}
+  rangeDraw();
+}
+function rangeUnload(){const v=$('#rv');v.pause()}
+function rangeDraw(){
+  if(!R)return;const tl=R.tl;tl.resize();const x=tl.ctx(),W=tl.W,H=tl.H,dur=P.info.dur;
+  x.clearRect(0,0,W,H);tl.ruler(x,0,18);
+  const top=20,th=H-top-26;
+  if(R.stripImg&&P.strip){const n=P.strip.n,tw=R.stripImg.width/n,tdur=dur/n;
+    for(let i=0;i<n;i++){const t0=i*tdur,t1=t0+tdur;if(t1<tl.a||t0>tl.b)continue;const x0=tl.x(t0),x1=tl.x(t1);
+      x.drawImage(R.stripImg,i*tw,0,tw,R.stripImg.height,x0,top,x1-x0+1,th)}}
+  else{x.fillStyle='#14181e';x.fillRect(0,top,W,th);x.fillStyle='#6b7380';x.fillText('miniature in preparazione…',10,top+20)}
+  if(R.energy){const e=R.energy,st=e.step;x.fillStyle='rgba(83,252,24,.55)';
+    for(let i=0;i<e.v.length;i++){const t=i*st;if(t<tl.a-st||t>tl.b)continue;const h=clamp((e.v[i]+60)/55,0,1)*th*0.6;const px=tl.x(t);x.fillRect(px,top+th-h,Math.max(1,tl.x(t+st)-px),h)}}
+  // fuori selezione scurito
+  x.fillStyle='rgba(0,0,0,.62)';const sx=tl.x(R.s),ex=tl.x(R.e);x.fillRect(0,top,Math.max(0,sx),th);x.fillRect(ex,top,W-ex,th);
+  x.strokeStyle='#53fc18';x.lineWidth=2;x.strokeRect(sx,top+1,ex-sx,th-2);
+  for(const px of [sx,ex]){x.fillStyle='#53fc18';x.fillRect(px-4,top,8,th);x.fillStyle='#061006';x.fillRect(px-1,top+th/2-8,2,16)}
+  // barra per spostare la selezione
+  x.fillStyle='#1a1e25';x.fillRect(0,H-24,W,24);x.fillStyle='#2f6d1f';x.fillRect(sx,H-22,ex-sx,20);x.fillStyle='#c8ffb0';x.font='11px Segoe UI';
+  if(ex-sx>90)x.fillText('↔ trascina per spostare la parte',sx+8,H-8);
+  const v=$('#rv');const px=tl.x(v.currentTime||0);x.fillStyle='#fff';x.fillRect(px-1,0,2,H-24);
+  $('#rStart').value=tcs(R.s);$('#rEnd').value=tcs(R.e);$('#rDur').textContent=tcs(R.e-R.s);
+}
+function rangeSetHere(k){const t=$('#rv').currentTime||0;if(k==='s')R.s=Math.min(t,R.e-5);else R.e=Math.max(t,R.s+5);rangeDraw()}
+function rangeAll(){R.s=0;R.e=P.info.dur;R.tl.a=0;R.tl.b=P.info.dur;rangeDraw()}
+function rangeTyped(){const a=parseTc($('#rStart').value),b=parseTc($('#rEnd').value);if(a!=null)R.s=clamp(a,0,P.info.dur-5);if(b!=null)R.e=clamp(b,R.s+5,P.info.dur);rangeDraw()}
+async function rangeNext(){const r=await api(`/api/project/${PID}/range`,{start:R.s,end:R.e});if(r.error)return alert(r.error);P.range=[R.s,R.e];P.status='choose';showView('vChoose')}
+
+/* ---------- layout clip (cam sopra, gioco sotto) ---------- */
 /* ---------- layout editor ---------- */
 const img=$('#frame'), ov=$('#ov'), ph=$('#ph');
 function camAspect(){const ch=Math.round(1920*L.split/2)*2;return 1080/ch}
@@ -356,11 +610,8 @@ async function saveLayout(rerender){
   if(rerender){lastClipsSig=''}
 }
 
-/* ---------- analisi ---------- */
-async function startAE(){await saveLayout();$('#done').style.display='none';
-  const r=await api(`/api/project/${PID}/autoedit`,{ritmo:$('#aeRitmo').value,zoom:$('#aeZoom').value,sens:+$('#aeSens').value,full_cam:$('#aeFull').checked});
-  if(!r.ok)alert('Aspetta che finisca il lavoro in corso')}
-async function exportAE(){const r=await api(`/api/project/${PID}/autoedit/export`,{mp4:$('#aeMp4').checked});if(!r.ok)alert('Aspetta che finisca il lavoro in corso')}
+
+/* ---------- analisi clip ---------- */
 async function startAnalyze(){
   await saveLayout();
   await api(`/api/project/${PID}/analyze`,{max_clips:+$('#oN').value,model:$('#oModel').value,max_len:+$('#oMax').value,min_len:+$('#oMin').value});
@@ -424,8 +675,220 @@ async function gpuInstall(){await api('/api/gpu',{});clearInterval(window.gpuT);
 async function saveCfg(){const b={ai_model:$('#cModel').value,pre:+$('#cPre').value,post:+$('#cPost').value};if($('#cKey').value)b.api_key=$('#cKey').value.trim();await api('/api/config',b);closeCfg()}
 async function clearKey(){await api('/api/config',{api_key:''});closeCfg()}
 
+
+/* ---------- 4b: riquadro cam per gli zoom (proporzioni libere) ---------- */
+let CE=null, cdrag=null, cFrame=0;
+function camEditInit(){
+  const im=$('#cframe'), cv=$('#cov');
+  if(!CE){CE={cam:P.edit_cam?{...P.edit_cam}:(P.layout&&P.layout.cam?{...P.layout.cam}:{x:0,y:P.info.h*0.6,w:P.info.w*0.28,h:P.info.h*0.38})};
+    cv.onmousedown=e=>{const p=cpos(e),r=CE.cam,hs=18*p.k;if(!r)return;
+      if(Math.abs(p.x-(r.x+r.w))<hs&&Math.abs(p.y-(r.y+r.h))<hs)cdrag={mode:'size',r:{...r},p};
+      else if(p.x>=r.x&&p.x<=r.x+r.w&&p.y>=r.y&&p.y<=r.y+r.h)cdrag={mode:'move',r:{...r},p};
+      else{const w=P.info.w*0.25,h=P.info.h*0.33;CE.cam={x:clamp(p.x-w/2,0,P.info.w-w),y:clamp(p.y-h/2,0,P.info.h-h),w,h};camDraw();camSave()}};
+    window.addEventListener('mousemove',e=>{if(!cdrag)return;const p=cpos(e),I=P.info;let r={...cdrag.r};
+      if(cdrag.mode==='move'){r.x=clamp(r.x+p.x-cdrag.p.x,0,I.w-r.w);r.y=clamp(r.y+p.y-cdrag.p.y,0,I.h-r.h)}
+      else{r.w=clamp(cdrag.r.w+p.x-cdrag.p.x,60,I.w-r.x);r.h=clamp(cdrag.r.h+p.y-cdrag.p.y,40,I.h-r.y)}
+      CE.cam=r;camDraw()});
+    window.addEventListener('mouseup',()=>{if(cdrag){cdrag=null;camSave()}});
+    window.addEventListener('resize',()=>{if(VIEW==='vEditSetup')camDraw()});
+  }
+  $('#cthumbs').innerHTML=(P.frames||[]).map((f,i)=>`<img src="/p/${PID}/${f}" class="${i===cFrame?'on':''}" onclick="cFrame=${i};camEditInit()">`).join('');
+  im.onload=camDraw;im.src=`/p/${PID}/${P.frames[cFrame]}`;
+  $('#eNoCam').checked=!P.edit_cam&&!!P.edit;
+  const o=(P.edit&&P.edit.opts)||{};
+  if(o.ritmo)$('#eRitmo').value=o.ritmo; if(o.zoom)$('#eZoom').value=o.zoom; if(o.sens)$('#eSens').value=String(o.sens);
+  if(o.full_cam!=null)$('#eFull').checked=o.full_cam; if(o.blur!=null)$('#eBlur').checked=o.blur; if(o.out)$('#eOutBlur').checked=o.out==='blur';
+}
+function cpos(e){const b=$('#cov').getBoundingClientRect(),k=P.info.w/b.width;return{x:(e.clientX-b.left)*k,y:(e.clientY-b.top)*k,k}}
+function camDraw(){const im=$('#cframe'),cv=$('#cov');if(!im.naturalWidth)return;const d=devicePixelRatio;
+  const W=cv.width=im.clientWidth*d,H=cv.height=im.clientHeight*d,k=W/P.info.w,x=cv.getContext('2d');
+  x.clearRect(0,0,W,H);if($('#eNoCam').checked||!CE.cam)return;
+  const r=CE.cam;x.fillStyle='rgba(0,0,0,.5)';x.fillRect(0,0,W,H);x.clearRect(r.x*k,r.y*k,r.w*k,r.h*k);
+  x.strokeStyle='#ff3d5a';x.lineWidth=3*d;x.strokeRect(r.x*k,r.y*k,r.w*k,r.h*k);
+  x.fillStyle='#ff3d5a';const hs=16*d;x.fillRect((r.x+r.w)*k-hs,(r.y+r.h)*k-hs,hs,hs);
+  x.font=`bold ${13*d}px Segoe UI`;x.fillText('CAM · qui va lo zoom',r.x*k+8*d,r.y*k+18*d)}
+async function camSave(){await api(`/api/project/${PID}/editcam`,{cam:$('#eNoCam').checked?null:CE.cam});P.edit_cam=$('#eNoCam').checked?null:CE.cam}
+$('#eNoCam').addEventListener('change',()=>{camDraw();camSave()});
+async function autoCamEdit(){const r=await api(`/api/project/${PID}/autocam`,{split:0.4});
+  if(r.cam){CE.cam=r.cam;$('#eNoCam').checked=false;camDraw();camSave()}else alert('Non ho trovato la faccia: disegna il riquadro a mano.')}
+async function startEdit(){await camSave();
+  const r=await api(`/api/project/${PID}/edit/analyze`,{ritmo:$('#eRitmo').value,zoom:$('#eZoom').value,sens:+$('#eSens').value,
+    full_cam:$('#eFull').checked,blur:$('#eBlur').checked,out:$('#eOutBlur').checked?'blur':'netto'});
+  if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else{ED=null;$('#jobbar').classList.remove('hidden')}}
+
+/* ---------- 4b: EDITOR ---------- */
+let ED=null, edrag=null, hist=[], redo=[], saveT=null, raf=null, montato=true, sel=null;
+const T_IN=0.26, T_OUT=0.18, LANES={ruler:[0,18],audio:[20,58],cut:[82,46],zoom:[134,46]};
+function edUnload(){const v=$('#ev');if(v){v.pause()}cancelAnimationFrame(raf);raf=null}
+async function edLoad(){
+  const v=$('#ev');
+  const p=P; if(!p.edit){return}
+  const e=JSON.parse(JSON.stringify(p.edit));
+  ED={keep:e.keep,zooms:e.zooms,zoom:e.zoom||1.32,blur:e.blur!==false,out:e.out||'blur',range:e.range,report:e.report,cam:p.edit_cam,energy:null,
+      tl:new TL($('#etl'),e.range[0],e.range[1])};
+  const span=e.range[1]-e.range[0];ED.tl.b=ED.tl.a+Math.min(span,240);  // parte con ~4 minuti visibili
+  hist=[];redo=[];sel=null;
+  if(!v.src.includes(`/api/project/${PID}/src`)){v.src=`/api/project/${PID}/src`}
+  v.onloadedmetadata=()=>{if(v.currentTime<ED.range[0]||v.currentTime>ED.range[1])v.currentTime=(ED.keep[0]||ED.range)[0]};
+  if(v.readyState>0)v.currentTime=(ED.keep[0]||ED.range)[0];
+  $('#eZoom2').value=String([1.18,1.32,1.5].reduce((a,b)=>Math.abs(b-ED.zoom)<Math.abs(a-ED.zoom)?b:a));
+  $('#eBlur2').checked=ED.blur;$('#eOut2').checked=ED.out==='blur';
+  api(`/api/project/${PID}/energy?start=${e.range[0]}&end=${e.range[1]}&step=0.5`).then(d=>{ED.energy=d;edDraw()});
+  edStats();edInsp();
+  if(!ED.ro){ED.ro=new ResizeObserver(()=>edDraw());ED.ro.observe($('#etlBox'))}
+  cancelAnimationFrame(raf);raf=requestAnimationFrame(edTick);
+}
+/* --- geometria dello zoom (uguale al render) --- */
+function zoomView(lv){const I=P.info,c=ED.cam;if(!lv||!c)return null;
+  const S=lv===1?ED.zoom:Math.max(ED.zoom,Math.min(3.2,I.h/(c.h*1.08)));const w=I.w/S,h=I.h/S;
+  const x0=clamp(c.x+c.w/2-w/2,0,I.w-w),y0=clamp(c.y+c.h/2-h/2,0,I.h-h);return{S,x0,y0}}
+function keepAt(t){return ED.keep.find(k=>t>=k[0]&&t<k[1])}
+function zoneOf(z){let s=Infinity,e=-Infinity;for(const [a,b] of ED.keep){if(b>z.s&&a<z.e){s=Math.min(s,Math.max(a,z.s));e=Math.max(e,Math.min(b,z.e))}}return s<e?[s,e]:null}
+function zoomState(t){
+  if(!montato)return{z:1,blur:0};
+  const z=ED.zooms.find(q=>t>=q.s&&t<q.e);if(!z||!keepAt(t))return{z:1,blur:0,v:null};
+  const v=zoomView(z.lv);if(!v)return{z:1,blur:0};const zn=zoneOf(z)||[z.s,z.e];
+  let zz=v.S,bl=0;
+  if(ED.blur){const p=clamp((t-zn[0])/T_IN,0,1);if(p<1){zz=1+(v.S-1)*(1-Math.pow(1-p,3));bl=(1-p)*14}
+    if(ED.out==='blur'){const q=clamp((zn[1]-t)/T_OUT,0,1);if(q<1){const zo=v.S-(v.S-1)*Math.pow(1-q,2);if(zo<zz){zz=zo;bl=Math.max(bl,(1-q)*10)}}}}
+  return{z:zz,blur:bl,v,lv:z.lv}}
+function srcToEdited(t){let acc=0;for(const [a,b] of ED.keep){if(t>=b)acc+=b-a;else{if(t>a)acc+=t-a;break}}return acc}
+function edTick(){
+  raf=requestAnimationFrame(edTick);if(!ED||VIEW!=='vEditor')return;
+  const v=$('#ev');let t=v.currentTime;
+  if(montato&&!v.paused&&!edrag){
+    if(t>=ED.range[1]-0.02){v.pause()}
+    else if(!keepAt(t)){const nx=ED.keep.find(k=>k[0]>t);if(nx)v.currentTime=nx[0];else v.pause()}
+  }
+  const st=zoomState(t),scr=$('#screen'),k=scr.clientWidth/P.info.w;
+  if(st.v&&st.z>1.0005){const F=1-1/st.v.S,fx=st.v.x0/F*k,fy=st.v.y0/F*k;
+    v.style.transformOrigin=`${fx}px ${fy}px`;v.style.transform=`scale(${st.z})`;v.style.filter=st.blur>0.5?`blur(${st.blur.toFixed(1)}px)`:'none'}
+  else{v.style.transform='none';v.style.filter='none'}
+  $('#ebadge').textContent=montato?(st.lv===2?'MONTATO · CAM PIENA':st.lv===1?'MONTATO · ZOOM CAM':(keepAt(t)?'MONTATO':'MONTATO · (parte tagliata)')):'ORIGINALE';
+  $('#ePlay').textContent=v.paused?'▶ Play':'⏸ Pausa';
+  $('#eTc').innerHTML=`montato <b>${tcs(srcToEdited(t))}</b> / ${tcs(ED.report?ED.report.durata_finale:0)} · nel VOD ${tcs(t)}`;
+  if(!v.paused&&!edrag)ED.tl.follow(t);
+  edDraw();
+}
+function edToggle(){const v=$('#ev');if(v.paused){if(v.currentTime<ED.range[0]||v.currentTime>=ED.range[1]-0.05)v.currentTime=ED.keep[0][0];v.play()}else v.pause()}
+document.querySelectorAll('#ePrevSeg button').forEach(b=>b.onclick=()=>{montato=b.dataset.m==='1';document.querySelectorAll('#ePrevSeg button').forEach(x=>x.classList.toggle('on',x===b))});
+/* --- disegno timeline --- */
+function edDraw(){
+  if(!ED)return;const tl=ED.tl;tl.resize();const x=tl.ctx(),W=tl.W,H=tl.H,v=$('#ev');
+  x.clearRect(0,0,W,H);tl.ruler(x,0,18);
+  const [ay,ah]=LANES.audio,[cy,ch]=LANES.cut,[zy,zh]=LANES.zoom;
+  x.fillStyle='#6b7380';x.font='bold 10px Segoe UI';
+  x.fillStyle='#101318';x.fillRect(0,ay,W,ah);
+  if(ED.energy){const e=ED.energy,st=e.step,a0=e.start;x.fillStyle='#2e7d4f';
+    const i0=Math.max(0,Math.floor((tl.a-a0)/st)),i1=Math.min(e.v.length,Math.ceil((tl.b-a0)/st));
+    const stepPx=Math.max(1,Math.floor((i1-i0)/W));
+    for(let i=i0;i<i1;i+=stepPx){let m=-70;for(let j=i;j<Math.min(i1,i+stepPx);j++)m=Math.max(m,e.v[j]);
+      const h=clamp((m+60)/55,0,1)*ah,px=tl.x(a0+i*st);x.fillRect(px,ay+(ah-h)/2,Math.max(1,tl.x(a0+(i+stepPx)*st)-px),h)}}
+  // corsia tagli
+  x.fillStyle='#2a1015';x.fillRect(0,cy,W,ch);
+  x.fillStyle='rgba(255,61,90,.18)';for(let px=-((tl.x(0))%12);px<W;px+=12){x.fillRect(px,cy,4,ch)}
+  ED.keep.forEach((k,i)=>{if(k[1]<tl.a||k[0]>tl.b)return;const x0=tl.x(k[0]),x1=tl.x(k[1]);
+    const isSel=sel&&sel.type==='keep'&&sel.i===i;x.fillStyle=isSel?'#6fff3a':'#2f8f1c';x.fillRect(x0,cy+3,Math.max(1,x1-x0-1),ch-6);
+    if(x1-x0>14){x.fillStyle='#0c2a06';x.fillRect(x0,cy+3,2,ch-6);x.fillRect(x1-3,cy+3,2,ch-6)}});
+  if(sel&&sel.type==='gap'){x.strokeStyle='#ff3d5a';x.lineWidth=2;x.strokeRect(tl.x(sel.a),cy+2,tl.x(sel.b)-tl.x(sel.a),ch-4)}
+  // corsia zoom
+  x.fillStyle='#14181e';x.fillRect(0,zy,W,zh);
+  ED.zooms.forEach((z,i)=>{if(z.e<tl.a||z.s>tl.b)return;const x0=tl.x(z.s),x1=tl.x(z.e),isSel=sel&&sel.type==='zoom'&&sel.id===z.id;
+    x.fillStyle=z.lv===2?(isSel?'#ff7a90':'#d92f4b'):(isSel?'#ffd36b':'#e09a1a');x.beginPath();x.roundRect(x0,zy+5,Math.max(3,x1-x0),zh-10,6);x.fill();
+    if(isSel){x.strokeStyle='#fff';x.lineWidth=2;x.stroke()}
+    x.fillStyle='#000a';const ti=Math.min(x1-x0,Math.max(0,tl.x(z.s+T_IN)-x0));if(ED.blur)x.fillRect(x0,zy+5,ti,zh-10);
+    if(x1-x0>46){x.fillStyle='#111';x.font='bold 11px Segoe UI';x.fillText(z.lv===2?'CAM PIENA':'ZOOM',x0+8,zy+zh/2+4)}});
+  // etichette corsie
+  x.font='bold 10px Segoe UI';
+  for(const [nm,[y]] of [['AUDIO',LANES.audio],['TAGLI',LANES.cut],['ZOOM',LANES.zoom]]){x.fillStyle='#0b0d10cc';x.fillRect(0,y,46,14);x.fillStyle='#8b94a3';x.fillText(nm,5,y+11)}
+  // playhead
+  const px=tl.x(v.currentTime||0);x.fillStyle='#fff';x.fillRect(px-1,0,2,H);x.beginPath();x.moveTo(px-6,0);x.lineTo(px+6,0);x.lineTo(px,8);x.fill();
+  $('#eZoomTl').value=Math.round(100*(1-Math.log((tl.b-tl.a)/4)/Math.log(Math.max(1.01,(tl.max-tl.min)/4))));
+}
+/* --- interazione timeline --- */
+const etl=$('#etl');
+function edHit(xp,yp){const tl=ED.tl,t=tl.t(xp),tol=7*(tl.b-tl.a)/tl.W;
+  const [zy,zh]=LANES.zoom,[cy,ch]=LANES.cut;
+  if(yp>=zy&&yp<=zy+zh){for(const z of ED.zooms){if(Math.abs(t-z.s)<tol)return{type:'zoom',z,edge:'s',t};if(Math.abs(t-z.e)<tol)return{type:'zoom',z,edge:'e',t};if(t>z.s&&t<z.e)return{type:'zoom',z,edge:null,t}}return{type:'zoomlane',t}}
+  if(yp>=cy&&yp<=cy+ch){for(let i=0;i<ED.keep.length;i++){const k=ED.keep[i];
+      if(Math.abs(t-k[0])<tol)return{type:'keep',i,edge:0,t};if(Math.abs(t-k[1])<tol)return{type:'keep',i,edge:1,t};if(t>=k[0]&&t<k[1])return{type:'keep',i,edge:null,t}}
+    const prev=[...ED.keep].reverse().find(k=>k[1]<=t),next=ED.keep.find(k=>k[0]>=t);
+    return{type:'gap',a:prev?prev[1]:ED.range[0],b:next?next[0]:ED.range[1],t}}
+  return{type:'seek',t}}
+etl.onmousemove=e=>{if(edrag||!ED)return;const h=edHit(e.offsetX,e.offsetY);etl.style.cursor=(h.edge!=null&&h.edge!==undefined&&(h.type==='zoom'||h.type==='keep'))?'ew-resize':(h.type==='zoom'?'grab':'pointer')};
+etl.onmousedown=e=>{if(!ED)return;const h=edHit(e.offsetX,e.offsetY),v=$('#ev');
+  if(h.type==='seek'||h.type==='zoomlane'){v.currentTime=clamp(h.t,ED.range[0],ED.range[1]);edrag={type:'seek'};if(h.type==='zoomlane'){sel=null;edInsp()}return}
+  if(h.type==='zoom'){pushHist();sel={type:'zoom',id:h.z.id};edrag={type:'zoom',z:h.z,edge:h.edge,t0:h.t,s:h.z.s,e:h.z.e};edInsp();return}
+  if(h.type==='keep'){sel={type:'keep',i:h.i};if(h.edge!=null){pushHist();edrag={type:'keep',i:h.i,edge:h.edge}}else{v.currentTime=h.t;edrag={type:'seek'}}edInsp();return}
+  if(h.type==='gap'){sel={type:'gap',a:h.a,b:h.b};v.currentTime=h.t;edInsp();}
+};
+etl.ondblclick=e=>{if(!ED)return;const h=edHit(e.offsetX,e.offsetY);if(h.type==='zoomlane')edAddZoom(h.t)};
+window.addEventListener('mousemove',e=>{if(!edrag||!ED)return;const b=etl.getBoundingClientRect(),t=clamp(ED.tl.t(e.clientX-b.left),ED.range[0],ED.range[1]);
+  if(edrag.type==='seek'){$('#ev').currentTime=t}
+  else if(edrag.type==='zoom'){const z=edrag.z;
+    if(edrag.edge==='s')z.s=Math.min(t,z.e-0.4);else if(edrag.edge==='e')z.e=Math.max(t,z.s+0.4);
+    else{const d=t-edrag.t0,len=edrag.e-edrag.s;z.s=clamp(edrag.s+d,ED.range[0],ED.range[1]-len);z.e=z.s+len}}
+  else if(edrag.type==='keep'){const k=ED.keep[edrag.i],pv=ED.keep[edrag.i-1],nx=ED.keep[edrag.i+1];
+    if(edrag.edge===0)k[0]=clamp(t,pv?pv[1]+0.05:ED.range[0],k[1]-0.2);else k[1]=clamp(t,k[0]+0.2,nx?nx[0]-0.05:ED.range[1])}
+  edDraw()});
+window.addEventListener('mouseup',()=>{if(edrag&&ED){const ch=edrag.type!=='seek';edrag=null;if(ch){ED.zooms.sort((a,b)=>a.s-b.s);edChanged()}}});
+etl.addEventListener('wheel',e=>{if(!ED)return;e.preventDefault();if(e.shiftKey||Math.abs(e.deltaX)>Math.abs(e.deltaY))ED.tl.pan((ED.tl.b-ED.tl.a)*(e.deltaX||e.deltaY)/800);else ED.tl.zoomAt(e.offsetX,e.deltaY>0?1.2:0.83);edDraw()},{passive:false});
+$('#eZoomTl').oninput=e=>{if(!ED)return;const tl=ED.tl,full=tl.max-tl.min,span=4*Math.pow(Math.max(1.01,full/4),1-e.target.value/100),c=$('#ev').currentTime;
+  tl.a=clamp(c-span/2,tl.min,tl.max-span);tl.b=tl.a+span;edDraw()};
+/* --- azioni --- */
+function pushHist(){hist.push(JSON.stringify({k:ED.keep,z:ED.zooms}));if(hist.length>100)hist.shift();redo=[]}
+function edUndo(){if(!hist.length)return;redo.push(JSON.stringify({k:ED.keep,z:ED.zooms}));const s=JSON.parse(hist.pop());ED.keep=s.k;ED.zooms=s.z;sel=null;edChanged(true)}
+function edRedo(){if(!redo.length)return;hist.push(JSON.stringify({k:ED.keep,z:ED.zooms}));const s=JSON.parse(redo.pop());ED.keep=s.k;ED.zooms=s.z;sel=null;edChanged(true)}
+function edChanged(){edInsp();edStatsLocal();edDraw();clearTimeout(saveT);saveT=setTimeout(edSave,500)}
+async function edSave(){if(!ED)return;const r=await api(`/api/project/${PID}/edit/save`,{keep:ED.keep,zooms:ED.zooms,zoom:ED.zoom,blur:ED.blur,out:ED.out});if(r.report){ED.report=r.report;edStats()}}
+function edAddZoom(t){if(!ED)return;if(!ED.cam){alert('Prima imposta la cam (⚙ Cam e opzioni)');return}t=t??$('#ev').currentTime;pushHist();
+  const id=Math.max(0,...ED.zooms.map(z=>z.id))+1;let s=t,e=Math.min(ED.range[1],t+2.5);
+  const nx=ED.zooms.filter(z=>z.s>t).sort((a,b)=>a.s-b.s)[0];if(nx&&e>nx.s)e=nx.s;if(e-s<0.4)return;
+  ED.zooms.push({id,s,e,lv:1});ED.zooms.sort((a,b)=>a.s-b.s);sel={type:'zoom',id};edChanged()}
+function edSplit(){const t=$('#ev').currentTime,i=ED.keep.findIndex(k=>t>k[0]+0.1&&t<k[1]-0.1);if(i<0)return;pushHist();const k=ED.keep[i];ED.keep.splice(i,1,[k[0],t],[t,k[1]]);sel={type:'keep',i:i+1};edChanged()}
+function edDelete(){if(!sel)return;pushHist();
+  if(sel.type==='zoom')ED.zooms=ED.zooms.filter(z=>z.id!==sel.id);
+  else if(sel.type==='keep')ED.keep.splice(sel.i,1);
+  else if(sel.type==='gap'){edRestore();return}
+  sel=null;edChanged()}
+function edRestore(){if(!sel||sel.type!=='gap')return;const {a,b}=sel;const keep=[...ED.keep,[a,b]].sort((p,q)=>p[0]-q[0]);
+  const m=[];for(const k of keep){if(m.length&&k[0]<=m[m.length-1][1]+0.01)m[m.length-1][1]=Math.max(m[m.length-1][1],k[1]);else m.push([...k])}ED.keep=m;sel=null;edChanged()}
+function edSetLv(lv){const z=ED.zooms.find(q=>sel&&q.id===sel.id);if(!z)return;pushHist();z.lv=lv;edChanged()}
+function edSetStyle(){ED.zoom=+$('#eZoom2').value;ED.blur=$('#eBlur2').checked;ED.out=$('#eOut2').checked?'blur':'netto';edChanged()}
+function edGo(t){const v=$('#ev');v.currentTime=Math.max(ED.range[0],t-1.5);v.play()}
+function edInsp(){const box=$('#eInsp');let h='<h4>Selezione</h4>';
+  if(!sel){h+='<div class="hint">Clicca un pezzo verde (tenuto), una parte rossa (tagliata) o uno zoom nella timeline.</div>'}
+  else if(sel.type==='zoom'){const z=ED.zooms.find(q=>q.id===sel.id);if(!z){sel=null;return edInsp()}
+    h+=`<b>${z.lv===2?'🔴 Cam a tutto schermo':'🟠 Zoom sulla cam'}</b><div class="hint">${tcs(z.s)} → ${tcs(z.e)} · ${(z.e-z.s).toFixed(1)} s</div>
+      <div class="row"><div class="seg"><button class="${z.lv===1?'on':''}" onclick="edSetLv(1)">Zoom</button><button class="${z.lv===2?'on':''}" onclick="edSetLv(2)">Cam piena</button></div></div>
+      <div class="row"><button onclick="edGo(${z.s})">▶ Guardalo</button><button onclick="edDelete()">🗑 Elimina zoom</button></div>
+      <div class="hint" style="margin-top:6px">Trascinalo per spostarlo, tira i bordi per allungarlo.</div>`}
+  else if(sel.type==='keep'){const k=ED.keep[sel.i];if(!k){sel=null;return edInsp()}
+    h+=`<b>🟩 Pezzo tenuto</b><div class="hint">${tcs(k[0])} → ${tcs(k[1])} · ${(k[1]-k[0]).toFixed(1)} s</div>
+      <div class="row"><button onclick="edGo(${k[0]+1.5})">▶ Guardalo</button><button onclick="edDelete()">✂ Taglia questo pezzo</button></div>
+      <div class="hint" style="margin-top:6px">Tira i bordi per allargarlo o stringerlo. "Spezza qui" lo divide sul cursore.</div>`}
+  else if(sel.type==='gap'){h+=`<b>🟥 Parte tagliata</b><div class="hint">${tcs(sel.a)} → ${tcs(sel.b)} · ${(sel.b-sel.a).toFixed(1)} s</div>
+      <div class="row"><button class="pri" onclick="edRestore()">↩ Rimettila</button></div>`}
+  box.innerHTML=h}
+function edStatsLocal(){ED.report=Object.assign({},ED.report||{},{durata_finale:ED.keep.reduce((s,k)=>s+k[1]-k[0],0),tagli:ED.keep.length,
+  zoom:ED.zooms.filter(z=>z.lv===1).length,cam_piena:ED.zooms.filter(z=>z.lv===2).length});ED.report.tagliato=(ED.range[1]-ED.range[0])-ED.report.durata_finale;edStats()}
+function edStats(){const r=ED.report||{};const box=(k,v)=>`<div class="stat"><small>${k}</small><b>${v}</b></div>`;
+  $('#eStats').innerHTML=box('Prima',tcs(ED.range[1]-ED.range[0]))+box('Dopo',tcs(r.durata_finale||0))+box('Pezzi',r.tagli||0)+box('Tolti',tcs(r.tagliato||0))+box('Zoom',r.zoom||0)+box('Cam piena',r.cam_piena||0)}
+async function edTruePreview(){await edSave();const r=await api(`/api/project/${PID}/edit/preview`,{t:$('#ev').currentTime});if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else $('#jobbar').classList.remove('hidden')}
+async function edExport(xml,mp4){await edSave();const r=await api(`/api/project/${PID}/edit/export`,{premiere:xml,mp4});if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else{$('#jobbar').classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'})}}
+window.addEventListener('keydown',e=>{if(VIEW!=='vEditor'||!ED||/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName))return;const v=$('#ev');
+  if(e.code==='Space'){e.preventDefault();edToggle()}
+  else if(e.key==='z'&&(e.ctrlKey||e.metaKey)){e.preventDefault();edUndo()}
+  else if(e.key==='y'&&(e.ctrlKey||e.metaKey)){e.preventDefault();edRedo()}
+  else if(e.key==='z'||e.key==='Z'){edAddZoom()}
+  else if(e.key==='s'||e.key==='S'){edSplit()}
+  else if(e.key==='Delete'||e.key==='Backspace'){edDelete()}
+  else if(e.key==='ArrowLeft'){v.currentTime=Math.max(ED.range[0],v.currentTime-(e.shiftKey?5:1))}
+  else if(e.key==='ArrowRight'){v.currentTime=Math.min(ED.range[1],v.currentTime+(e.shiftKey?5:1))}});
+
 api('/api/config').then(c=>window.CFG=c);
 loadRecent();
+
 </script>
 </body>
 </html>

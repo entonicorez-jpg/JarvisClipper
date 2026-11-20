@@ -40,10 +40,13 @@ def run(out_path):
     step("xml premiere", lambda: premiere.build_xml(clips, vid, info, L, {clips[0]["id"]: os.path.join(d, "f.mp4")}, os.path.join(d, "x.xml")))
     from core import autoedit
     cam = {"x": 900, "y": 400, "w": 360, "h": 270}
-    pl = {}
-    step("montaggio: piano", lambda: pl.update(autoedit.plan(vid, info, cam, {"ritmo": "normale"}, log=lambda m: None)) or pl["report"])
-    step("montaggio: xml", lambda: premiere.build_autoedit_xml(pl, vid, info, cam, os.path.join(d, "ae.xml")))
-    step("montaggio: mp4", lambda: media.probe(autoedit.render(vid, info, cam, pl, os.path.join(d, "ae.mp4")))["dur"])
+    ed = {}
+    step("montaggio: analisi parte 10-50s", lambda: ed.update(autoedit.analyze_edit(vid, info, cam, {"ritmo": "normale", "range": [10, 50]}, log=lambda m: None)) or ed["report"])
+    step("montaggio: zoom aggiunto", lambda: ed["zooms"].append({"id": 99, "s": 20.0, "e": 23.0, "lv": 2}) or len(ed["zooms"]))
+    fx = {}
+    step("montaggio: zoom con motion blur", lambda: fx.update(autoedit.render_fx(vid, info, cam, ed, os.path.join(d, "fx"))) or len(fx))
+    step("montaggio: xml", lambda: premiere.build_autoedit_xml(ed, vid, info, cam, os.path.join(d, "ae.xml"), fx=fx))
+    step("montaggio: mp4", lambda: media.probe(autoedit.render(vid, info, cam, ed, os.path.join(d, "ae.mp4")))["dur"])
     step("autocam (opencv)", lambda: layout.auto_cam([], info))
     for mod in ("yt_dlp", "curl_cffi", "cv2", "webview", "faster_whisper", "ctranslate2", "flask"):
         step("import " + mod, lambda m=mod: __import__(m) and None)

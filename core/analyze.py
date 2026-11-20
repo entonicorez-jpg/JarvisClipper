@@ -39,10 +39,17 @@ def clip01(x):
 
 
 # ----------------------------------------------------------------- segnali grezzi
-def audio_energy(path, dur, cb=None, stop=None):
-    """Loudness in dB ogni 0.5 s (streaming, poca RAM)."""
+def _span(start, length):
+    a = ["-ss", f"{start:.3f}"] if start else []
+    b = ["-t", f"{length:.3f}"] if start or length else []
+    return a, b
+
+
+def audio_energy(path, dur, cb=None, stop=None, start=0.0):
+    """Loudness in dB ogni 0.5 s (streaming, poca RAM). dur = durata da leggere a partire da start."""
     sr, blk = 8000, 4000
-    p = media.popen(["-hide_banner", "-loglevel", "error", "-i", path, "-vn", "-ac", "1", "-ar", str(sr),
+    a, b = _span(start, dur)
+    p = media.popen(["-hide_banner", "-loglevel", "error"] + a + ["-i", path] + b + ["-vn", "-ac", "1", "-ar", str(sr),
                      "-f", "s16le", "-"], stdout=media.subprocess.PIPE, stderr=media.subprocess.DEVNULL)
     out, total, buf = [], max(1, int(dur * 2)), b""
     while True:
@@ -64,17 +71,18 @@ def audio_energy(path, dur, cb=None, stop=None):
     return np.maximum(np.array(out, dtype=np.float32), -70.0)
 
 
-def motion_energy(path, dur, info, cam=None, cb=None, stop=None):
+def motion_energy(path, dur, info, cam=None, cb=None, stop=None, start=0.0):
     """Quanto cambia il gioco tra un keyframe e l'altro (veloce: decodifica solo i keyframe)."""
-    r = _motion(path, dur, info, cam, cb, stop, ["-fps_mode", "passthrough"])
+    r = _motion(path, dur, info, cam, cb, stop, ["-fps_mode", "passthrough"], start)
     if r is None:  # ffmpeg vecchio senza -fps_mode
-        r = _motion(path, dur, info, cam, cb, stop, ["-vsync", "0"])
+        r = _motion(path, dur, info, cam, cb, stop, ["-vsync", "0"], start)
     return r
 
 
-def _motion(path, dur, info, cam, cb, stop, sync):
+def _motion(path, dur, info, cam, cb, stop, sync, start=0.0):
     W, H = 96, 54
-    args = ["-hide_banner", "-skip_frame", "nokey", "-i", path, "-an", "-vf",
+    a, b = _span(start, dur)
+    args = ["-hide_banner", "-skip_frame", "nokey"] + a + ["-i", path] + b + ["-an", "-vf",
             f"scale={W}:{H},format=gray,showinfo"] + sync + ["-f", "rawvideo", "-"]
     p = media.popen(args, stdout=media.subprocess.PIPE, stderr=media.subprocess.PIPE)
     times = []
@@ -241,8 +249,11 @@ def ai_rerank(clips, api_key, model, log=print):
 # ----------------------------------------------------------------- pipeline
 def analyze(path, info, layout, opts, progress, log, stop=lambda: False):
     """progress(frazione, messaggio). Ritorna lista di clip ordinate per punteggio."""
-    dur = info["dur"]
+    rs, re_ = opts.get("range") or (0.0, info["dur"])
+    rs, re_ = max(0.0, float(rs)), min(info["dur"], float(re_))
+    dur = re_ - rs  # da qui in poi i tempi sono relativi all'inizio della parte scelta
     cam = layout.get("cam") if layout else None
+    cached = opts.get("_half")
     max_clips = int(opts.get("max_clips", 15))
     min_len, max_len = float(opts.get("min_len", 15)), float(opts.get("max_len", 59))
 
@@ -254,11 +265,15 @@ def analyze(path, info, layout, opts, progress, log, stop=lambda: False):
         progress(0.02 + 0.38 * (0.6 * prog["a"] + 0.4 * prog["m"]), "Ascolto l'audio e guardo il gioco…")
 
     def ta():
-        res["a"] = audio_energy(path, dur, lambda f: (prog.__setitem__("a", f), upd()), stop)
+        if cached is not None and len(cached) >= int(re_ * 2) - 2:
+            res["a"] = cached[int(rs * 2):int(re_ * 2)]
+            prog["a"] = 1.0
+        else:
+            res["a"] = audio_energy(path, dur, lambda f: (prog.__setitem__("a", f), upd()), stop, rs)
 
     def tm():
         try:
-            res["m"] = motion_energy(path, dur, info, cam, lambda f: (prog.__setitem__("m", f), upd()), stop)
+            res["m"] = motion_energy(path, dur, info, cam, lambda f: (prog.__setitem__("m", f), upd()), stop, rs)
         except Exception as e:
             log(f"Movimento non disponibile: {e}"); res["m"] = None
         prog["m"] = 1.0
@@ -324,7 +339,11 @@ def analyze(path, info, layout, opts, progress, log, stop=lambda: False):
         segs = []
         if tr:
             try:
-                segs = tr.transcribe(path, ws, we - ws, beam)
+                segs = tr.transcribe(path, ws + rs, we - ws, beam)
+                for sg in segs:
+                    sg["s"] -= rs; sg["e"] -= rs
+                    for w in sg["words"]:
+                        w["s"] -= rs; w["e"] -= rs
             except Exception as e:
                 log(f"Errore trascrizione a {media.tc(p)}: {e}")
         pre, post = float(opts.get("pre", 14)), float(opts.get("post", 8))
@@ -357,6 +376,13 @@ def analyze(path, info, layout, opts, progress, log, stop=lambda: False):
             log(f"AI non disponibile: {e}")
     for i, c in enumerate(kept):
         c["id"] = i + 1
+        if rs:
+            c["start"] = round(c["start"] + rs, 2); c["end"] = round(c["end"] + rs, 2); c["peak"] += int(rs)
+            for w in c["words"]:
+                w["s"] += rs; w["e"] += rs
+            if c["title"].startswith("Momento a "):
+                c["title"] = f"Momento a {media.tc(c['peak'])}"
+            c["reasons"] = [dict(r, t=r["t"].replace(media.tc(c["peak"] - int(rs)), media.tc(c["peak"]))) for r in c["reasons"]]
     progress(1.0, "Fatto")
     return kept
 
