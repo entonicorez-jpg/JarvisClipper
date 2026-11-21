@@ -44,6 +44,20 @@ if __name__ == "__main__":
                 pass
             ok = False
         os._exit(0 if ok else 1)
+    for flag in ("--tiktok-title", "--emoji-setup"):
+        if flag in sys.argv:
+            # chiamato da FilmCraft Jarvis per i Titoli TikTok: niente finestra
+            i = sys.argv.index(flag)
+            try:
+                from core import titles
+                if flag == "--tiktok-title":
+                    ok = titles.run_title(sys.argv[i + 1], sys.argv[i + 2])
+                else:
+                    ok = titles.ensure_emoji(sys.argv[i + 1] if len(sys.argv) > i + 1 else None)
+            except Exception:
+                traceback.print_exc()
+                ok = False
+            os._exit(0 if ok else 1)
     if "--selftest" in sys.argv:
         import selftest
         out = sys.argv[sys.argv.index("--selftest") + 1]
