@@ -66,7 +66,7 @@ index 306b661..bebd165 100644
  craft-docpath = { workspace = true }
  web-time = "1"
 diff --git a/crates/engine/src/commands.rs b/crates/engine/src/commands.rs
-index 44399e4..3660b2f 100644
+index 44399e4..f4606e8 100644
 --- a/crates/engine/src/commands.rs
 +++ b/crates/engine/src/commands.rs
 @@ -842,6 +842,21 @@ pub fn linked_roll_pairs(seq: &filmcraft_project::Sequence, left: ClipId, right:
@@ -91,7 +91,32 @@ index 44399e4..3660b2f 100644
  pub fn with_links(s: &Session, clips: &[ClipId]) -> Vec<ClipId> {
      let mut out = Vec::new();
      for c in clips {
-@@ -2726,19 +2741,80 @@ fn build() -> Vec<CommandSpec> {
+@@ -2225,8 +2240,10 @@ fn build() -> Vec<CommandSpec> {
+                     None => s.state.selection.clone(),
+                 };
+                 let caps = if clips_and_captions_selected(s, p) { s.state.caption_selection.clone() } else { Default::default() };
++                let mut first: Option<Tick> = None;
+                 s.edit_sequence("Ripple Delete", |q, _, st| {
+                     let spans = edit::ripple_delete_items(q, &sel)?;
++                    first = spans.iter().map(|r| r.start).min();
+                     if st.ripple_sequence_markers {
+                         for r in spans.iter().rev() {
+                             crate::sequence_tools::ripple_markers(&mut q.markers, r.end(), -r.duration);
+@@ -2240,6 +2257,13 @@ fn build() -> Vec<CommandSpec> {
+                     st.caption_selection.retain(|c| q.find_caption(*c).is_some());
+                     Ok(())
+                 })?;
++                // Jarvis: dopo aver tolto il pezzo l'indicatore torna sul punto del taglio
++                // (senza riselezionare la clip dopo: un secondo D per sbaglio non deve cancellarla)
++                if let (Some(t), Some(seq)) = (first, s.state.active_sequence) {
++                    let rate = s.sequence_rate();
++                    s.state.playheads.insert(seq, rate.snap(t.max(Tick::ZERO)));
++                    jarvis_note_cut(s, t);
++                }
+                 Ok(Value::Null)
+             }
+         ),
+@@ -2726,19 +2750,80 @@ fn build() -> Vec<CommandSpec> {
          }),
          cmd!("sequence.addEdit", "Add Edit", ["Sequence"], Some("Cmd+K"), r#"{"time":ticks?}"#, has_seq, |s, p| {
              let t = time_p(s, p, "").unwrap_or(s.playhead());
@@ -174,7 +199,7 @@ index 44399e4..3660b2f 100644
          cmd!("sequence.addEditAllTracks", "Add Edit to All Tracks", ["Sequence"], Some("Cmd+Shift+K"), r#"{"time":ticks?}"#, has_seq, |s, p| {
              let t = time_p(s, p, "").unwrap_or(s.playhead());
              let n = s.edit_sequence("Add Edit to All Tracks", |q, ctx, _| {
-@@ -4236,6 +4312,7 @@ fn build() -> Vec<CommandSpec> {
+@@ -4236,6 +4321,7 @@ fn build() -> Vec<CommandSpec> {
      v.extend(crate::presets::commands());
      v.extend(crate::export_tools::commands());
      v.extend(crate::transcript::commands());
