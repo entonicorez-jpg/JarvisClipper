@@ -163,6 +163,12 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
 .tog{display:flex;align-items:center;gap:10px;margin:10px 0;color:var(--txt)}
 .tog input{width:18px;height:18px;accent-color:var(--acc)}
 .prevmodal video{max-width:92vw;max-height:80vh;border-radius:14px;background:#000}
+.trim{position:relative;height:26px;margin:8px 4px 2px;cursor:default;user-select:none;touch-action:none}
+.trim .trbar{position:absolute;left:0;right:0;top:10px;height:6px;border-radius:3px;background:#2a2f3a}
+.trim .trsel{position:absolute;top:7px;height:12px;border-radius:4px;background:linear-gradient(90deg,var(--acc),var(--acc2));opacity:.85}
+.trim .trh{position:absolute;top:1px;width:12px;height:24px;margin-left:-6px;border-radius:4px;background:#fff;box-shadow:0 1px 4px #0008;cursor:ew-resize}
+.trim .trh:hover{transform:scaleY(1.08)}
+.trhint{font-size:11px;color:var(--mut);margin:0 4px 6px}
 </style>
 </head>
 <body>
@@ -369,7 +375,8 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
   <div class="sp"></div>
   <label style="display:flex;gap:8px;align-items:center;color:var(--mut)"><input type="checkbox" id="doRender" checked style="accent-color:var(--acc)"> crea anche gli MP4 verticali</label>
   <button onclick="openFolder()">📂 Cartella</button>
-  <button class="pri" onclick="doExport()">⬇ Esporta in Premiere</button>
+  <button onclick="doExport(false)">⬇ Esporta in Premiere</button>
+  <button class="pri" onclick="doExport(true)">🦉 Esporta in FilmCraft</button>
 </div>
 
 <div class="modal" id="cfg"><div class="box">
@@ -658,8 +665,8 @@ function drawClips(){
         <div class="top"><div class="score" style="border:3px solid ${col};color:${col}">${c.score}<small style="color:${col}">${lab}</small></div>
           <input class="title" value="${esc(c.title)}" onchange="setClip(${c.id},{title:this.value})"></div>
         <div class="time">⏱ ${tc(c.start)} → ${tc(c.end)} · <b>${d}s</b>${c.score_ai!=null?` · regole ${c.score_regole} / AI ${c.score_ai}`:''}</div>
-        <div class="nud">inizio <button class="sm" onclick="nud(${c.id},'start',-5)">-5</button><button class="sm" onclick="nud(${c.id},'start',-1)">-1</button><button class="sm" onclick="nud(${c.id},'start',1)">+1</button><button class="sm" onclick="nud(${c.id},'start',5)">+5</button>
-          &nbsp;fine <button class="sm" onclick="nud(${c.id},'end',-5)">-5</button><button class="sm" onclick="nud(${c.id},'end',-1)">-1</button><button class="sm" onclick="nud(${c.id},'end',1)">+1</button><button class="sm" onclick="nud(${c.id},'end',5)">+5</button></div>
+        <div class="trim" id="tr${c.id}" data-id="${c.id}"><div class="trbar"></div><div class="trsel"></div><div class="trh" data-k="start" title="trascina: inizio"></div><div class="trh" data-k="end" title="trascina: fine"></div></div>
+        <div class="trhint">Trascina le maniglie per tagliare o allungare la clip</div>
         ${c.hook?`<div class="chip" style="border-color:var(--acc2)">🎣 Hook: ${esc(c.hook)}</div>`:''}
         <div class="chips">${(c.reasons||[]).map(r=>`<span class="chip">${esc(r.t)}</span>`).join('')}</div>
         ${(c.warnings||[]).map(w=>`<div class="warn">${esc(w)}</div>`).join('')}
@@ -667,7 +674,18 @@ function drawClips(){
         <label class="check"><input type="checkbox" ${c.selected?'checked':''} onchange="setClip(${c.id},{selected:this.checked})"> Esporta questa</label>
       </div></div>`}).join('');
   $('#selN').textContent=cs.filter(c=>c.selected).length+' selezionate';
+  cs.forEach(c=>trimInit(c));
 }
+/* barra per tagliare la clip: finestra di contesto attorno alla clip, due maniglie */
+function trimWin(c){if(c._w)return c._w;const pad=Math.max(15,(c.end-c.start)*0.6);const a=Math.max(0,c.start-pad),b=Math.min(P.info.dur,c.end+pad);c._w=[a,b];return c._w}
+function trimDraw(c){const el=document.querySelector('#tr'+c.id);if(!el)return;const [a,b]=trimWin(c);const f=t=>((t-a)/(b-a)*100).toFixed(2)+'%';
+  const hs=el.querySelectorAll('.trh');hs[0].style.left=f(c.start);hs[1].style.left=f(c.end);const sl=el.querySelector('.trsel');sl.style.left=f(c.start);sl.style.width=((c.end-c.start)/(b-a)*100).toFixed(2)+'%'}
+function trimInit(c){const el=document.querySelector('#tr'+c.id);if(!el)return;trimDraw(c);
+  el.querySelectorAll('.trh').forEach(h=>{h.onpointerdown=ev=>{ev.preventDefault();h.setPointerCapture(ev.pointerId);const k=h.dataset.k;const r=el.getBoundingClientRect();const [a,b]=trimWin(c);
+    h.onpointermove=e=>{let t=a+(e.clientX-r.left)/r.width*(b-a);t=Math.round(t*10)/10;
+      if(k==='start')c.start=Math.max(0,Math.min(t,c.end-3));else c.end=Math.min(P.info.dur,Math.max(t,c.start+3));trimDraw(c);
+      document.querySelector(`#c${c.id} .time`).innerHTML=`⏱ ${tc(c.start)} → ${tc(c.end)} · <b>${(c.end-c.start).toFixed(1)}s</b>`};
+    h.onpointerup=()=>{h.onpointermove=null;h.onpointerup=null;document.querySelector(`#c${c.id} .time`).innerHTML+=' · <i>aggiorno l\'anteprima…</i>';setClip(c.id,{start:c.start,end:c.end,rerender:true})}}})}
 const nudT={};
 function nud(id,k,dv){const c=P.clips.find(x=>x.id===id);c[k]=Math.max(0,+(c[k]+dv).toFixed(2));if(c.end-c.start<3)return;
   document.querySelector(`#c${id} .time`).innerHTML=`⏱ ${tc(c.start)} → ${tc(c.end)} · <b>${(c.end-c.start).toFixed(0)}s</b> · <i>aggiorno…</i>`;
@@ -677,12 +695,13 @@ async function setClip(id,d){await api(`/api/project/${PID}/clip/${id}`,d);if('s
 async function selAll(v){for(const c of P.clips){if(c.selected!==v)await setClip(c.id,{selected:v})}}
 function bigPlay(id){const c=P.clips.find(x=>x.id===id);if(!c.preview)return;const v=$('#bigv');v.src=`/p/${PID}/${c.preview}`;v.muted=false;$('#big').classList.add('on')}
 function closeBig(e){if(e.target.id==='big'){$('#bigv').pause();$('#big').classList.remove('on')}}
-async function doExport(){
+async function doExport(fc){
   const ids=P.clips.filter(c=>c.selected).map(c=>c.id);if(!ids.length)return alert('Seleziona almeno una clip');
-  await saveLayout();const r=await api(`/api/project/${PID}/export`,{ids,render:$('#doRender').checked});
+  await saveLayout();const r=await api(`/api/project/${PID}/export`,{ids,render:$('#doRender').checked,filmcraft:!!fc});
   if(!r.ok)alert('Aspetta che finisca il lavoro in corso');
 }
 function showDone(e){const d=$('#done');d.style.display='block';
+  if(e.filmcraft){d.innerHTML=`✅ <b>${e.n} clip esportate.</b> ${e.opened?'Si aprono in FilmCraft Jarvis, dentro una cartella "Clip Jarvis".':'In FilmCraft: <b>File › Importa</b> e scegli <code>'+esc(e.xml.split(/[\\/]/).pop())+'</code>.'} Ogni clip è una sequenza verticale: V1 gioco, V2 cam (ritagli e posizioni modificabili). <button class="sm" onclick="openFolder()">Apri cartella</button>`;return}
   d.innerHTML=`✅ <b>${e.n} clip esportate.</b> In Premiere: <b>File › Importa</b> e scegli <code>${esc(e.xml.split(/[\\/]/).pop())}</code>. Trovi una cartella "Jarvis Clipper" con una sequenza verticale per clip: <b>V1 gioco</b>, <b>V2 cam</b> (ritagli e posizioni modificabili in Controllo effetti), <b>V3</b> la versione già montata (spenta, come riferimento). <button class="sm" onclick="openFolder()">Apri cartella</button>`}
 async function openFolder(){await api(`/api/project/${PID}/open`,{})}
 

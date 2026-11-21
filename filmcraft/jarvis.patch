@@ -1,3 +1,15 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index a4b12bc..274c4d9 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2404,6 +2404,7 @@ dependencies = [
+  "filmcraft-text",
+  "filmcraft-time",
+  "filmcraft-tts",
++ "flate2",
+  "image",
+  "log",
+  "roxmltree",
 diff --git a/apps/filmcraft/src/main.rs b/apps/filmcraft/src/main.rs
 index f6e64ea..77bbf39 100644
 --- a/apps/filmcraft/src/main.rs
@@ -41,6 +53,18 @@ index f6e64ea..77bbf39 100644
          app.graphics_notice = notice;
          if recover == Some(false) {
              app.dialog = None;
+diff --git a/crates/engine/Cargo.toml b/crates/engine/Cargo.toml
+index 306b661..bebd165 100644
+--- a/crates/engine/Cargo.toml
++++ b/crates/engine/Cargo.toml
+@@ -43,6 +43,7 @@ serde_json = { workspace = true }
+ thiserror = { workspace = true }
+ log = { workspace = true }
+ roxmltree = { workspace = true }
++flate2 = "1"
+ chrono = { workspace = true }
+ craft-docpath = { workspace = true }
+ web-time = "1"
 diff --git a/crates/engine/src/commands.rs b/crates/engine/src/commands.rs
 index 44399e4..3660b2f 100644
 --- a/crates/engine/src/commands.rs
@@ -160,10 +184,10 @@ index 44399e4..3660b2f 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..024d896
+index 0000000..645d738
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,1059 @@
+@@ -0,0 +1,1333 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -233,7 +257,7 @@ index 0000000..024d896
 +        stroke: Some(BLACK), stroke_w: 0.13, shadow: true, boxed: None, words: 3, upper: true, pop: true },
 +    CapStyle { id: "hormozi", name: "Hormozi (verde)", font: "Arial Black", font_style: "Regular", fill: WHITE, highlight: &[GREEN], hl_size: 1.15,
 +        stroke: Some(BLACK), stroke_w: 0.14, shadow: true, boxed: None, words: 3, upper: true, pop: true },
-+    CapStyle { id: "parola", name: "Una parola alla volta", font: "Arial Black", font_style: "Regular", fill: WHITE, highlight: &[WHITE, YELLOW, GREEN, CYAN], hl_size: 1.0,
++    CapStyle { id: "parola", name: "Una parola alla volta", font: "Arial Black", font_style: "Regular", fill: WHITE, highlight: &[], hl_size: 1.0,
 +        stroke: Some(BLACK), stroke_w: 0.14, shadow: true, boxed: None, words: 1, upper: true, pop: true },
 +    CapStyle { id: "beast", name: "Beast (giallo + rosso)", font: "Arial Black", font_style: "Regular", fill: YELLOW, highlight: &[RED], hl_size: 1.1,
 +        stroke: Some(BLACK), stroke_w: 0.16, shadow: true, boxed: None, words: 2, upper: true, pop: true },
@@ -928,6 +952,7 @@ index 0000000..024d896
 +            r#"{"preset":"c_zoom_in|c_zoom_spin|c_slide_left|c_slide_right|c_slide_up|c_slide_down|c_whip|c_glitch|c_impact|c_mix","scope":"playhead|selection|all"?,"frames":n?}"#,
 +            composer,
 +        ),
++        spec("jarvis.composerItem", "Jarvis: Transizione Premiere Composer", r#"{"path":str,"time":ticks?,"scope":"playhead|selection|all"?,"sfx":bool?,"sfxGain":f?}"#, mh_apply),
 +        spec("jarvis.clipFx", "Jarvis: Effetto clip", r#"{"preset":"punch|zoom_in|zoom_out|shake","amount":f?}"#, clip_fx),
 +    ]
 +}
@@ -1223,6 +1248,279 @@ index 0000000..024d896
 +        Ok(())
 +    })
 +}
++
++// ---------------------------------------------------------------- libreria Premiere Composer
++// Le transizioni di Premiere Composer (Mister Horse) installate sul PC dell'utente: ogni file
++// `.mhpctransition` è un progetto Premiere (gzip) con livelli di regolazione su più tracce, divisi
++// sul punto del taglio, e uno swoosh. Si leggono così come sono e si rifanno in FilmCraft: stessi
++// effetti e keyframe (convertiti con il lettore dei preset Premiere), stesso suono.
++
++pub const COMPOSER_TRACK: &str = "Composer";
++
++#[derive(Clone, Debug)]
++pub struct MhItem {
++    pub name: String,
++    pub category: String,
++    pub path: std::path::PathBuf,
++    pub thumb: Option<std::path::PathBuf>,
++}
++
++fn strip_num(s: &str) -> String {
++    let t = s.trim();
++    let t = if t.starts_with('(') { t.find(')').map(|i| t[i + 1..].trim()).unwrap_or(t) } else { t };
++    t.replace("[$", "[").to_string()
++}
++
++/// Le transizioni Composer installate (ordinate per categoria e nome).
++pub fn composer_library() -> &'static Vec<MhItem> {
++    static LIB: std::sync::OnceLock<Vec<MhItem>> = std::sync::OnceLock::new();
++    LIB.get_or_init(|| {
++        let mut out = Vec::new();
++        let Some(la) = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from) else { return out };
++        let products = la.join("MisterHorse").join("ProductManager").join("Products");
++        let mut stack = vec![(products, 0usize)];
++        while let Some((d, depth)) = stack.pop() {
++            let Ok(rd) = std::fs::read_dir(&d) else { continue };
++            for e in rd.flatten() {
++                let p = e.path();
++                if p.is_dir() {
++                    if depth < 6 {
++                        stack.push((p, depth + 1));
++                    }
++                } else if p.extension().and_then(|x| x.to_str()) == Some("mhpctransition") {
++                    let stem = p.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
++                    let thumb = p.with_file_name(format!("{stem}.mhpreview.png"));
++                    let category = p.parent().and_then(|x| x.file_name()).map(|x| strip_num(&x.to_string_lossy())).unwrap_or_default();
++                    out.push(MhItem { name: strip_num(&stem), category, thumb: thumb.exists().then_some(thumb), path: p.clone() });
++                }
++            }
++        }
++        out.sort_by(|a, b| (a.category.clone(), a.path.clone()).cmp(&(b.category.clone(), b.path.clone())));
++        out
++    })
++}
++
++/// Una transizione letta: tracce di pezzi (inizio, fine, effetti), suoni, punto del taglio.
++pub struct MhTransition {
++    pub split: Tick,
++    pub tracks: Vec<Vec<(Tick, Tick, Vec<filmcraft_project::EffectInstance>)>>,
++    pub audio: Vec<(std::path::PathBuf, Tick)>,
++}
++
++fn txt<'a>(n: roxmltree::Node<'a, '_>, tag: &str) -> Option<&'a str> {
++    n.descendants().find(|c| c.tag_name().name() == tag).and_then(|c| c.text())
++}
++
++fn scale_points(e: &mut filmcraft_project::EffectInstance, sx: f64, sy: f64) {
++    if (sx - 1.0).abs() < 1e-9 && (sy - 1.0).abs() < 1e-9 {
++        return;
++    }
++    for p in e.params.values_mut() {
++        p.map_values(|v| match v {
++            ParamValue::Vec2(q) if q.x.is_finite() && q.y.is_finite() => ParamValue::Vec2(Vec2::new(q.x * sx, q.y * sy)),
++            other => other,
++        });
++    }
++}
++
++pub fn load_mh(path: &std::path::Path, frame: (u32, u32)) -> std::result::Result<MhTransition, String> {
++    use std::io::Read;
++    let raw = std::fs::read(path).map_err(|e| e.to_string())?;
++    let mut text = String::new();
++    if raw.starts_with(&[0x1f, 0x8b]) {
++        flate2::read::GzDecoder::new(&raw[..]).read_to_string(&mut text).map_err(|e| e.to_string())?;
++    } else {
++        text = String::from_utf8_lossy(&raw).to_string();
++    }
++    let doc = roxmltree::Document::parse(&text).map_err(|e| e.to_string())?;
++    let mut objects: crate::prfpset::Objects<'_, '_> = std::collections::HashMap::new();
++    let mut uobjects: std::collections::HashMap<&str, roxmltree::Node<'_, '_>> = std::collections::HashMap::new();
++    for n in doc.descendants() {
++        if let Some(id) = n.attribute("ObjectID") {
++            objects.insert(id, n);
++        }
++        if let Some(id) = n.attribute("ObjectUID") {
++            uobjects.insert(id, n);
++        }
++    }
++    fn rf<'a, 'i>(n: roxmltree::Node<'a, 'i>, tag: &str) -> Option<&'a str> {
++        n.descendants().find(|c| c.tag_name().name() == tag).and_then(|c| c.attribute("ObjectRef"))
++    }
++    // Composer è fatto a 1920x1080: i punti si riportano alla sequenza
++    let (sx, sy) = (frame.0 as f64 / 1920.0, frame.1 as f64 / 1080.0);
++    // tracce video nell'ordine del gruppo
++    let mut tracks = Vec::new();
++    if let Some(tg) = doc.descendants().find(|n| n.tag_name().name() == "VideoTrackGroup" && n.attribute("ObjectID").is_some()) {
++        let mut refs: Vec<(usize, &str)> = tg
++            .descendants()
++            .filter(|n| n.tag_name().name() == "Track" && n.attribute("ObjectURef").is_some())
++            .map(|n| (n.attribute("Index").and_then(|i| i.parse().ok()).unwrap_or(0), n.attribute("ObjectURef").unwrap_or("")))
++            .collect();
++        refs.sort();
++        for (_, uref) in refs {
++            let Some(track) = uobjects.get(uref) else { continue };
++            let mut pieces = Vec::new();
++            for ti in track.descendants().filter(|n| n.tag_name().name() == "TrackItem" && n.attribute("ObjectRef").is_some()) {
++                let Some(item) = ti.attribute("ObjectRef").and_then(|r| objects.get(r)).copied() else { continue };
++                let start = txt(item, "Start").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
++                let end = txt(item, "End").and_then(|v| v.parse::<i64>().ok()).unwrap_or(start);
++                // in-point della clip (i keyframe sono contati da lì)
++                let anchor_in = rf(item, "SubClip")
++                    .and_then(|r| objects.get(r))
++                    .and_then(|sc| rf(*sc, "Clip"))
++                    .and_then(|r| objects.get(r))
++                    .and_then(|c| txt(*c, "InPoint"))
++                    .and_then(|v| v.parse::<i64>().ok())
++                    .unwrap_or(0);
++                let mut effects = Vec::new();
++                if let Some(chain) = rf(item, "Components").and_then(|r| objects.get(r)) {
++                    for c in chain.descendants().filter(|n| n.tag_name().name() == "Component" && n.attribute("ObjectRef").is_some()) {
++                        let Some(comp) = c.attribute("ObjectRef").and_then(|r| objects.get(r)).copied() else { continue };
++                        let match_name = txt(comp, "MatchName").unwrap_or("").trim().to_string();
++                        let display = txt(comp, "DisplayName").unwrap_or("").trim().to_string();
++                        // i livelli grafici vuoti (Testo, Forma) e le maschere non servono
++                        if matches!(match_name.as_str(), "AE.ADBE Text" | "AE.ADBE Shape" | "AE.ADBE AEMask") {
++                            continue;
++                        }
++                        let Some(eid) = crate::prfpset::resolve_effect(&match_name, &display) else { continue };
++                        if eid == "motion" || eid == "opacity" {
++                            continue;
++                        }
++                        if let Ok((mut inst, _)) = crate::prfpset::parse_component(eid, &match_name, comp, anchor_in, &objects) {
++                            scale_points(&mut inst, sx, sy);
++                            effects.push(inst);
++                        }
++                    }
++                }
++                // nel progetto Premiere la catena è salvata dall'ultimo effetto al primo
++                effects.reverse();
++                pieces.push((Tick(start), Tick(end), effects));
++            }
++            if !pieces.is_empty() {
++                pieces.sort_by_key(|p| p.0);
++                tracks.push(pieces);
++            }
++        }
++    }
++    if tracks.is_empty() {
++        return Err("nessun livello nella transizione".into());
++    }
++    // il taglio: dove si dividono i pezzi
++    let split = tracks.iter().find(|t| t.len() > 1).map(|t| t[0].1).unwrap_or_else(|| Tick(tracks[0][0].1 .0 / 2));
++    // suoni: percorsi ___MH_PATH___ = cartella Assets del prodotto
++    let assets = path.ancestors().find(|a| a.join("Assets").is_dir()).map(|a| a.join("Assets"));
++    let mut audio = Vec::new();
++    for item in doc.descendants().filter(|n| n.tag_name().name() == "AudioClipTrackItem" && n.attribute("ObjectID").is_some()) {
++        let start = txt(item, "Start").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
++        let media = rf(item, "SubClip").and_then(|r| objects.get(r)).and_then(|sc| rf(*sc, "Clip")).and_then(|r| objects.get(r));
++        let _ = media;
++        let p = doc
++            .descendants()
++            .filter(|n| n.tag_name().name() == "ActualMediaFilePath")
++            .filter_map(|n| n.text())
++            .find(|t| t.starts_with("___MH_PATH___"))
++            .map(|t| t.trim_start_matches("___MH_PATH___").to_string());
++        if let (Some(rel), Some(a)) = (p, &assets) {
++            let f = a.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
++            if f.exists() {
++                audio.push((f, Tick(start)));
++            }
++        }
++    }
++    Ok(MhTransition { split, tracks, audio })
++}
++
++fn mh_apply(s: &mut Session, p: &Value) -> Result<Value> {
++    let path = std::path::PathBuf::from(str_p(p, "path").ok_or_else(|| bad("jarvis.composerItem", "manca il file"))?);
++    let (w, h, rate) = {
++        let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
++        (q.settings.width, q.settings.height, q.settings.frame_rate)
++    };
++    let mh = load_mh(&path, (w, h)).map_err(EngineError::Other)?;
++    // dove: il taglio vicino a `time` (trascinamento) o all'indicatore, oppure i tagli della selezione
++    let times: Vec<Tick> = if let Some(t) = p.get("time").and_then(Value::as_i64).map(Tick) {
++        let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
++        let cuts: Vec<Tick> = q.video_tracks.iter().filter(|tr| tr.name != CAPTION_TRACK && !tr.name.starts_with(COMPOSER_TRACK)).flat_map(|tr| {
++            tr.items.windows(2).filter(|w| w[0].end() == w[1].start).map(|w| w[1].start).collect::<Vec<_>>()
++        }).collect();
++        vec![cuts.into_iter().min_by_key(|c| (c.0 - t.0).abs()).unwrap_or(t)]
++    } else {
++        let v = cut_times(s, str_p(p, "scope").unwrap_or("playhead"));
++        if v.is_empty() { vec![s.playhead()] } else { v }
++    };
++    let seq_id = s.state.active_sequence.ok_or(EngineError::NoSequence)?;
++    let n = s.edit("Transizione Composer", |pr, _st| {
++        let adj = pr.items.iter().find(|(_, i)| i.name == "Composer (Jarvis)" && matches!(i.kind, filmcraft_project::ItemKind::AdjustmentLayer { .. })).map(|(id, _)| *id);
++        let adj = match adj {
++            Some(a) => a,
++            None => pr.add_item(
++                "Composer (Jarvis)",
++                filmcraft_project::Label::Lavender,
++                filmcraft_project::ItemKind::AdjustmentLayer { width: w, height: h, rate, duration: Tick::from_seconds_f64(36_000.0) },
++                None,
++            ),
++        };
++        let mut placed: Vec<(usize, filmcraft_project::TrackItem)> = Vec::new();
++        for c in &times {
++            let off = Tick(c.0 - mh.split.0);
++            for (j, pieces) in mh.tracks.iter().enumerate() {
++                for (a, b, fx) in pieces {
++                    let start = rate.snap_nearest(Tick((a.0 + off.0).max(0)));
++                    let end = rate.snap_nearest(Tick((b.0 + off.0).max(0)));
++                    let dur = Tick(end.0 - start.0).max(rate.frame_duration());
++                    let Some(mut ti) = pr.make_track_item(adj, TrackKind::Video, start, TimeRange::new(Tick::ZERO, dur), rate) else { continue };
++                    ti.name = path.file_stem().map(|x| strip_num(&x.to_string_lossy())).unwrap_or_default();
++                    ti.effects.extend(fx.iter().cloned());
++                    placed.push((j, ti));
++                }
++            }
++        }
++        let mut ids: Vec<TrackId> = (0..8).map(|_| TrackId(pr.alloc_id())).collect();
++        let q = pr.sequence_mut(seq_id).ok_or(EngineError::NoSequence)?;
++        let n = placed.len();
++        let mut row_track: std::collections::HashMap<(usize, i64), usize> = Default::default();
++        for (j, ti) in placed {
++            let range = ti.range();
++            let key = (j, range.start.0 / 1_000_000_000_000);
++            let free = |tr: &Track| !tr.items.iter().any(|i| i.range().overlaps(&range));
++            let idx = match row_track.get(&key).copied().filter(|&i| free(&q.video_tracks[i])) {
++                Some(i) => i,
++                None => {
++                    let top = q.video_tracks.iter().rposition(|tr| tr.name != CAPTION_TRACK && tr.items.iter().any(|i| i.range().overlaps(&range))).map_or(0, |k| k + 1);
++                    let found = (top..q.video_tracks.len()).find(|&i| q.video_tracks[i].name.starts_with(COMPOSER_TRACK) && free(&q.video_tracks[i]) && !row_track.values().any(|&v| v == i && false));
++                    match found {
++                        Some(i) if j == 0 || row_track.get(&(j - 1, key.1)).is_none_or(|&prev| i > prev) => i,
++                        _ => {
++                            let id = ids.pop().unwrap_or(TrackId(0));
++                            let name = format!("{COMPOSER_TRACK} {}", q.video_tracks.iter().filter(|t| t.name.starts_with(COMPOSER_TRACK)).count() + 1);
++                            // sotto la traccia dei sottotitoli, se c'è
++                            let at = q.video_tracks.iter().position(|t| t.name == CAPTION_TRACK).unwrap_or(q.video_tracks.len());
++                            q.video_tracks.insert(at, Track::new(id, TrackKind::Video, name));
++                            for v in row_track.values_mut() {
++                                if *v >= at {
++                                    *v += 1;
++                                }
++                            }
++                            at
++                        }
++                    }
++                }
++            };
++            row_track.insert(key, idx);
++            q.video_tracks[idx].items.push(ti);
++            q.video_tracks[idx].sort();
++        }
++        q.check().map_err(EngineError::Other)?;
++        Ok(n)
++    })?;
++    let mut sfx = 0;
++    if bool_p(p, "sfx").unwrap_or(true) && !mh.audio.is_empty() {
++        let sounds: Vec<_> = times.iter().flat_map(|c| mh.audio.iter().map(move |(f, st)| (f.clone(), Tick((c.0 - mh.split.0 + st.0).max(0))))).collect();
++        sfx = place_sfx(s, sounds, f64_p(p, "sfxGain").unwrap_or(0.0))?;
++    }
++    Ok(json!({"layers": n, "transitions": times.len(), "sfx": sfx}))
++}
++
 diff --git a/crates/engine/src/lib.rs b/crates/engine/src/lib.rs
 index cead3c7..3d04cce 100644
 --- a/crates/engine/src/lib.rs
@@ -1235,6 +1533,110 @@ index cead3c7..3d04cce 100644
  pub mod keyboard;
  mod keyframe_move;
  mod marker_edit;
+diff --git a/crates/engine/src/prfpset.rs b/crates/engine/src/prfpset.rs
+index 4b2563b..16985a1 100644
+--- a/crates/engine/src/prfpset.rs
++++ b/crates/engine/src/prfpset.rs
+@@ -76,7 +76,7 @@ impl PrfpsetImport {
+     }
+ }
+ 
+-type Objects<'a, 'input> = HashMap<&'input str, Node<'a, 'input>>;
++pub(crate) type Objects<'a, 'input> = HashMap<&'input str, Node<'a, 'input>>;
+ 
+ /// Parse a Premiere `.prfpset` XML document.
+ pub fn parse_prfpset(text: &str) -> Result<PrfpsetImport, String> {
+@@ -387,7 +387,23 @@ fn parse_item<'a, 'input>(
+             continue;
+         };
+         match parse_component(effect_id, match_name, component, anchor_in, objects) {
+-            Ok((instance, missing)) => {
++            Ok((instance, mut missing)) => {
++                // Jarvis: il ritaglio dentro Movimento (Premiere recente) diventa un effetto Ritaglio
++                let is_crop = |m: &String| {
++                    let c = compact(m);
++                    c.starts_with("ritaglio") || c.starts_with("crop") || c.starts_with("recorte")
++                };
++                if effect_id == "motion" && missing.iter().any(is_crop) {
++                    if let Ok((crop, _)) = parse_component("crop", match_name, component, anchor_in, objects) {
++                        let used = ["left", "top", "right", "bottom"].iter().any(|k| {
++                            crop.params.get(*k).is_some_and(|p| p.is_animated() || p.value.as_f64().is_some_and(|v| v.abs() > 1e-6))
++                        });
++                        if used {
++                            effects.push(crop);
++                        }
++                        missing.retain(|m| !is_crop(m));
++                    }
++                }
+                 dropped.extend(missing);
+                 effects.push(instance);
+             }
+@@ -445,7 +461,7 @@ fn unsupported_name(match_name: &str, display: &str) -> String {
+ // ---------------------------------------------------------------- components
+ 
+ /// Parse a Premiere component node into a FilmCraft `EffectInstance`.
+-fn parse_component<'a, 'input>(
++pub(crate) fn parse_component<'a, 'input>(
+     effect_id: &str,
+     match_name: &str,
+     component: Node<'a, 'input>,
+@@ -528,7 +544,7 @@ impl RawParam {
+ // ---------------------------------------------------------------- effect mapping
+ 
+ /// Resolve a Premiere match name or display name to a FilmCraft effect ID.
+-fn resolve_effect(match_name: &str, display: &str) -> Option<&'static str> {
++pub(crate) fn resolve_effect(match_name: &str, display: &str) -> Option<&'static str> {
+     if let Some(id) = explicit_effect(match_name)
+         && let Some(def) = find_effect(id).filter(|d| !is_layer_id(d.id))
+     {
+@@ -982,6 +998,47 @@ fn param_synonyms(effect_id: &str, key: &str) -> Vec<&'static str> {
+         "mix" | "mezcla" => add(&["mix", "amount"]),
+         "bypass" | "omitir" => add(&["bypass"]),
+         "level" | "niveldevolumen" => add(&["level"]),
++        // Italiano (Premiere in italiano) — Jarvis
++        "posizione" => add(&["position"]),
++        "scala" => add(&["scale", "scale_height"]),
++        "altezzascala" | "altezzadiscala" => add(&["scale_height"]),
++        "larghezzascala" | "larghezzadiscala" => add(&["scale_width"]),
++        "scalauniforme" => add(&["uniform_scale"]),
++        "rotazione" => add(&["rotation"]),
++        "puntodiancoraggio" | "puntoancoraggio" => add(&["anchor"]),
++        "filtroantisfarfallio" | "antisfarfallio" => add(&["anti_flicker"]),
++        "opacità" | "opacita" => add(&["opacity"]),
++        "inclina" | "inclinazione" => add(&["skew"]),
++        "assediinclinazione" | "asseinclinazione" => add(&["skew_axis"]),
++        "angolootturatore" | "angolodellotturatore" => add(&["shutter_angle"]),
++        "usaangolootturatoredellacomposizione" => add(&["shutter_override"]),
++        "ritagliosinistro" | "sinistra" => add(&["left"]),
++        "ritagliosuperiore" | "superiore" | "alto" => add(&["top"]),
++        "ritagliodestro" | "destra" => add(&["right"]),
++        "ritaglioinferiore" | "inferiore" | "basso" => add(&["bottom"]),
++        "direzione" => add(&["direction"]),
++        "distanza" => add(&["distance"]),
++        "morbidezza" | "ammorbidimento" => add(&["softness", "smoothness"]),
++        "coloreombra" | "coloredellombra" => add(&["color", "shadow_color"]),
++        "soloombra" => add(&["shadow_only", "only"]),
++        "quantità" | "quantita" => add(&["amount"]),
++        "dimensioni" => add(&["size", "dimensions"]),
++        "complessità" | "complessita" => add(&["complexity"]),
++        "evoluzione" => add(&["evolution"]),
++        "numerocasuale" | "seme" => add(&["seed"]),
++        "scostamentoturbolenza" | "scostamento" => add(&["offset"]),
++        "lunghezzasfocatura" | "lunghezza" => add(&["length"]),
++        "sfocatura" | "intensitàsfocatura" => add(&["blurriness", "radius"]),
++        "centro" => add(&["center"]),
++        "angolo" => add(&["angle"]),
++        "spostamento" => add(&["shift", "offset"]),
++        "fusioneconloriginale" | "fusioneconoriginale" => add(&["blend"]),
++        "velocità" | "velocita" => add(&["speed"]),
++        "luminosità" | "luminosita" => add(&["brightness"]),
++        "saturazione" => add(&["saturation"]),
++        "raggio" => add(&["radius"]),
++        "soglia" => add(&["threshold"]),
++        "colore" => add(&["color"]),
+         _ => {}
+     }
+     v
 diff --git a/crates/engine/src/project_tools.rs b/crates/engine/src/project_tools.rs
 index 5a91987..7de3d1d 100644
 --- a/crates/engine/src/project_tools.rs
@@ -1256,6 +1658,22 @@ index 5a91987..7de3d1d 100644
      "trim.edit",
      "sequence.applyVideoTransition",
      "sequence.applyAudioTransition",
+diff --git a/crates/engine/src/sequence_tools.rs b/crates/engine/src/sequence_tools.rs
+index bc8e00f..65dde30 100644
+--- a/crates/engine/src/sequence_tools.rs
++++ b/crates/engine/src/sequence_tools.rs
+@@ -308,6 +308,11 @@ pub fn select_under_playhead(s: &mut Session) {
+     let t = s.playhead();
+     let tg = s.targeting().targeted;
+     let Some(q) = s.active_sequence() else { return };
++    // Jarvis: se una clip selezionata è ancora sotto l'indicatore (es. scorrendo in Controllo
++    // effetti dentro la clip), la selezione non cambia
++    if s.state.selection.iter().any(|c| q.find_item(*c).is_some_and(|(_, it)| it.start <= t && t < it.end())) {
++        return;
++    }
+     let ids: Vec<ClipId> = q.all_tracks().filter(|tr| tg.contains(&tr.id)).filter_map(|tr| tr.item_at(t).map(|i| i.id)).collect();
+     s.state.selection = with_links(s, &ids);
+ }
 diff --git a/crates/engine/src/settings/prefs.rs b/crates/engine/src/settings/prefs.rs
 index abfbd93..3dea546 100644
 --- a/crates/engine/src/settings/prefs.rs
@@ -1313,7 +1731,7 @@ index 0a57a1a..172cbe8 100644
  }
  
 diff --git a/crates/ui-egui/src/app.rs b/crates/ui-egui/src/app.rs
-index 250a7e2..392f4cf 100644
+index 250a7e2..db99a72 100644
 --- a/crates/ui-egui/src/app.rs
 +++ b/crates/ui-egui/src/app.rs
 @@ -47,6 +47,7 @@ impl FilmcraftApp {
@@ -1324,6 +1742,14 @@ index 250a7e2..392f4cf 100644
              file_dialogs: Default::default(),
              native_dialog: None,
              overwrite_prompt: None,
+@@ -103,6 +104,7 @@ impl FilmcraftApp {
+             fonts_ready: false,
+             integrated_titlebar: false,
+             last_timeline_width: 1000.0,
++            last_timeline_rect: None,
+             timeline_view_of: None,
+             pending_timeline_drop: None,
+             clip_mismatch: None,
 diff --git a/crates/ui-egui/src/app/frame.rs b/crates/ui-egui/src/app/frame.rs
 index e1a7428..22aa228 100644
 --- a/crates/ui-egui/src/app/frame.rs
@@ -1350,10 +1776,10 @@ index fd5f66c..fc6ef4d 100644
  	Add Guide…	Aggiungi guida…
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..8be74a1
+index 0000000..e12a480
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
-@@ -0,0 +1,463 @@
+@@ -0,0 +1,707 @@
 +//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
 +
 +use serde_json::{Value, json};
@@ -1389,6 +1815,11 @@ index 0000000..8be74a1
 +    upd_checked: bool,
 +    upd: std::sync::Arc<std::sync::Mutex<Option<(String, String)>>>,
 +    upd_dismissed: bool,
++    presets_checked: bool,
++    mh_cat: String,
++    /// transizione Composer che si sta trascinando (parametri del comando)
++    mh_drag: Option<(String, Value)>,
++    thumbs: std::collections::HashMap<std::path::PathBuf, Option<egui::TextureHandle>>,
 +}
 +
 +type CapResult = Result<Vec<(filmcraft_project::ItemId, filmcraft_project::Transcript)>, String>;
@@ -1425,6 +1856,10 @@ index 0000000..8be74a1
 +            upd_checked: false,
 +            upd: Default::default(),
 +            upd_dismissed: false,
++            presets_checked: false,
++            mh_cat: String::new(),
++            mh_drag: None,
++            thumbs: Default::default(),
 +        }
 +    }
 +}
@@ -1438,6 +1873,11 @@ index 0000000..8be74a1
 +pub(crate) fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
 +    update_banner(app, ctx);
 +    poll_captions(app, ctx);
++    composer_drag(app, ctx);
++    if !app.jarvis_ui.presets_checked {
++        app.jarvis_ui.presets_checked = true;
++        auto_presets(app, ctx);
++    }
 +    // esegue il comando in attesa (al secondo frame, dopo aver mostrato "attendi")
 +    if let Some((cmd, p, armed)) = app.jarvis_ui.pending.take() {
 +        if armed {
@@ -1464,10 +1904,14 @@ index 0000000..8be74a1
 +    }
 +    egui::Window::new("Jarvis Composer")
 +        .open(&mut open)
-+        .resizable(false)
-+        .default_width(360.0)
++        .resizable(true)
++        .default_width(560.0)
++        .default_height(760.0)
 +        .default_pos(ctx.content_rect().right_top() + egui::vec2(-400.0, 80.0))
 +        .show(ctx, |ui| {
++            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
++            composer_library_ui(st, ui, ctx, &mut run);
++            ui.separator();
 +            ui.heading("🔤 Sottotitoli animati");
 +            egui::ComboBox::from_id_salt("jarvis_style").width(220.0).selected_text(STYLES[st.style.min(STYLES.len() - 1)].name).show_ui(ui, |ui| {
 +                for (i, s) in STYLES.iter().enumerate() {
@@ -1593,12 +2037,30 @@ index 0000000..8be74a1
 +                ui.separator();
 +                ui.label(&st.msg);
 +            }
++            });
 +        });
 +    if !open {
 +        app.jarvis_ui.open = false;
 +    }
 +    if follow != follow_before {
 +        let _ = crate::menus::invoke(app, ctx, "sequence.selectionFollowsPlayhead", json!({"on": follow}));
++    }
++    if let Some((cmd, p, _)) = run.as_mut().filter(|(c, _, _)| c == "jarvis.composerItem") {
++        let _ = cmd;
++        // trascinata: il punto della Timeline dove l'ha lasciata
++        if let Some(pos) = p.get("dropX").and_then(Value::as_f64) {
++            let inside = app.last_timeline_rect.is_some_and(|r| r.x_range().contains(pos as f32) && p.get("dropY").and_then(Value::as_f64).is_some_and(|y| r.y_range().contains(y as f32)));
++            if let (true, Some(r)) = (inside, app.last_timeline_rect) {
++                let secs = app.ui.timeline.scroll + (pos - r.min.x as f64) / app.ui.timeline.pps;
++                p["time"] = json!(filmcraft_time::Tick::from_seconds_f64(secs.max(0.0)).0);
++            } else {
++                run = None;
++            }
++        }
++    }
++    if run.as_ref().is_some_and(|(c, _, _)| c == "jarvis.importPresets") {
++        run = None;
++        pick_and_import(app, ctx);
 +    }
 +    if let Some((cmd, p, _)) = run.as_ref().filter(|(c, _, _)| c == "jarvis.captionsBg") {
 +        start_captions(app, ctx, p.clone());
@@ -1625,6 +2087,7 @@ index 0000000..8be74a1
 +        "jarvis.autoCaptions" => format!("✅ Creati {} pezzi di sottotitoli", v["captions"].as_u64().unwrap_or(0)),
 +        "jarvis.transition" | "jarvis.composer" => format!("✅ Transizioni messe: {} · suoni: {}", v["transitions"].as_u64().unwrap_or(0), v["sfx"].as_u64().unwrap_or(0)),
 +        "jarvis.clipFx" => format!("✅ Effetto applicato a {} clip", v["clips"].as_u64().unwrap_or(0)),
++        "jarvis.composerItem" => format!("✅ Transizione Composer: {} livelli · suoni: {}", v["layers"].as_u64().unwrap_or(0), v["sfx"].as_u64().unwrap_or(0)),
 +        _ => "✅ Fatto".into(),
 +    }
 +}
@@ -1817,8 +2280,215 @@ index 0000000..8be74a1
 +        app.jarvis_ui.upd_dismissed = true;
 +    }
 +}
++
++// ---------------------------------------------------------------- preset di Premiere importati da soli
++// I file .prfpset messi in %LOCALAPPDATA%\FilmCraftJarvis\presets vengono importati all'avvio
++// (una volta per file/versione). Gli zoom degli short rifatti dall'utente non vengono reimportati.
++
++const SKIP_PRESETS: &[&str] = &["zoom shorts", "dezoom shorts"];
++
++/// Importa un file di preset Premiere (salta gli zoom degli short già rifatti). Ritorna quanti.
++fn import_prfpset(app: &mut FilmcraftApp, ctx: &egui::Context, path: &str) -> Result<usize, String> {
++    let names = |app: &mut FilmcraftApp| -> Vec<String> {
++        crate::menus::invoke(app, ctx, "presets.list", json!({}))
++            .ok()
++            .and_then(|v| v["presets"].as_array().map(|a| a.iter().filter_map(|x| x["name"].as_str().map(str::to_string)).collect()))
++            .unwrap_or_default()
++    };
++    let before = names(app);
++    let r = crate::menus::invoke(app, ctx, "presets.import", json!({"path": path}))?;
++    let imported: Vec<String> = r["imported"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
++    let mut count = 0;
++    for n in &imported {
++        if SKIP_PRESETS.iter().any(|s| n.eq_ignore_ascii_case(s)) && !before.iter().any(|b| b == n) {
++            let _ = crate::menus::invoke(app, ctx, "presets.delete", json!({"name": n}));
++        } else {
++            count += 1;
++        }
++    }
++    Ok(count)
++}
++
++pub(crate) fn pick_and_import(app: &mut FilmcraftApp, ctx: &egui::Context) {
++    let files = app.hooks.pick_files.as_mut().map(|f| f(&["prfpset"])).unwrap_or_default();
++    let mut total = 0;
++    for f in files {
++        match import_prfpset(app, ctx, &f) {
++            Ok(n) => total += n,
++            Err(e) => {
++                app.jarvis_ui.msg = format!("⚠ {e}");
++                return;
++            }
++        }
++    }
++    if total > 0 {
++        app.jarvis_ui.msg = format!("✅ Importati {total} preset: li trovi in Effetti › Preset (trascinali sulle clip)");
++    }
++}
++
++pub(crate) fn auto_presets(app: &mut FilmcraftApp, ctx: &egui::Context) {
++    let Some(dir) = std::env::var_os("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("FilmCraftJarvis").join("presets")) else { return };
++    let Ok(rd) = std::fs::read_dir(&dir) else { return };
++    let marker = dir.join("importati.txt");
++    let done = std::fs::read_to_string(&marker).unwrap_or_default();
++    let mut new_lines = Vec::new();
++    let mut count = 0usize;
++    for e in rd.flatten() {
++        let p = e.path();
++        if !p.extension().and_then(|x| x.to_str()).is_some_and(|x| x.eq_ignore_ascii_case("prfpset")) {
++            continue;
++        }
++        let stamp = e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
++        let key = format!("{}|{}", p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), stamp);
++        if done.lines().any(|l| l == key) {
++            continue;
++        }
++        let names = |app: &mut FilmcraftApp| -> Vec<String> {
++            crate::menus::invoke(app, ctx, "presets.list", json!({}))
++                .ok()
++                .and_then(|v| v["presets"].as_array().map(|a| a.iter().filter_map(|x| x["name"].as_str().map(str::to_string)).collect()))
++                .unwrap_or_default()
++        };
++        let before = names(app);
++        match crate::menus::invoke(app, ctx, "presets.import", json!({"path": p.to_string_lossy()})) {
++            Ok(r) => {
++                let imported: Vec<String> = r["imported"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
++                for n in &imported {
++                    if SKIP_PRESETS.iter().any(|s| n.eq_ignore_ascii_case(s)) && !before.iter().any(|b| b == n) {
++                        let _ = crate::menus::invoke(app, ctx, "presets.delete", json!({"name": n}));
++                    } else {
++                        count += 1;
++                    }
++                }
++                new_lines.push(key);
++            }
++            Err(e) => app.jarvis_ui.msg = format!("⚠ Preset {}: {e}", p.display()),
++        }
++    }
++    if !new_lines.is_empty() {
++        let mut all = done;
++        for l in new_lines {
++            all.push_str(&l);
++            all.push('\n');
++        }
++        let _ = std::fs::write(&marker, all);
++        app.ui.status = format!("Importati {count} preset di Premiere (pannello Effetti › Preset)");
++    }
++}
++
++
++// ---------------------------------------------------------------- libreria Premiere Composer (UI)
++
++fn thumb(st: &mut State, ctx: &egui::Context, p: &std::path::Path) -> Option<egui::TextureHandle> {
++    if let Some(t) = st.thumbs.get(p) {
++        return t.clone();
++    }
++    let tex = std::fs::read(p).ok().and_then(|b| image::load_from_memory(&b).ok()).map(|img| {
++        let img = img.thumbnail(320, 180).to_rgba8();
++        let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], &img);
++        ctx.load_texture(format!("jarvis-mh-{}", p.display()), ci, egui::TextureOptions::LINEAR)
++    });
++    st.thumbs.insert(p.to_path_buf(), tex.clone());
++    tex
++}
++
++fn composer_library_ui(st: &mut State, ui: &mut egui::Ui, ctx: &egui::Context, run: &mut Option<(String, Value, String)>) {
++    let lib = filmcraft_engine::jarvis::composer_library();
++    ui.horizontal(|ui| {
++        ui.heading("🎞 Premiere Composer");
++        if ui.button("📥 Importa preset Premiere…").on_hover_text("Scegli un file .prfpset (i tuoi preset di Premiere): finiscono in Effetti › Preset").clicked() {
++            *run = Some(("jarvis.importPresets".into(), json!({}), String::new()));
++        }
++    });
++    if lib.is_empty() {
++        ui.small("Premiere Composer non è installato su questo PC: qui compaiono le sue transizioni quando c'è.");
++        return;
++    }
++    let mut cats: Vec<String> = Vec::new();
++    for it in lib.iter() {
++        if !cats.contains(&it.category) {
++            cats.push(it.category.clone());
++        }
++    }
++    if st.mh_cat.is_empty() || !cats.contains(&st.mh_cat) {
++        st.mh_cat = cats[0].clone();
++    }
++    ui.small("Clic: sul taglio vicino all'indicatore · trascina sulla Timeline: sul taglio dove la lasci");
++    ui.horizontal_top(|ui| {
++        ui.vertical(|ui| {
++            ui.set_width(130.0);
++            for c in &cats {
++                if ui.selectable_label(*c == st.mh_cat, c).clicked() {
++                    st.mh_cat = c.clone();
++                }
++            }
++        });
++        ui.separator();
++        ui.vertical(|ui| {
++            let items: Vec<&filmcraft_engine::jarvis::MhItem> = lib.iter().filter(|i| i.category == st.mh_cat).collect();
++            let cols = ((ui.available_width() / 150.0).floor() as usize).max(1);
++            egui::Grid::new("jarvis_mh_grid").spacing([8.0, 8.0]).show(ui, |ui| {
++                for (k, it) in items.iter().enumerate() {
++                    let tex = it.thumb.as_ref().and_then(|p| thumb(st, ctx, p));
++                    let r = ui.vertical(|ui| {
++                        let size = egui::vec2(140.0, 79.0);
++                        let resp = match &tex {
++                            Some(t) => ui.add(egui::Image::new((t.id(), size)).sense(egui::Sense::click_and_drag())),
++                            None => ui.add_sized(size, egui::Button::new("▶").sense(egui::Sense::click_and_drag())),
++                        };
++                        ui.add_sized([140.0, 14.0], egui::Label::new(egui::RichText::new(&it.name).small()).truncate());
++                        resp
++                    });
++                    let resp = r.inner.on_hover_text(&it.name);
++                    let base = json!({"path": it.path.to_string_lossy(), "scope": SCOPES[st.scope].0, "sfx": st.sfx, "sfxGain": st.sfx_gain + 3.0});
++                    if resp.clicked() {
++                        *run = Some(("jarvis.composerItem".into(), base.clone(), String::new()));
++                    }
++                    if resp.drag_started() || (resp.dragged() && st.mh_drag.is_none()) {
++                        st.mh_drag = Some((it.name.clone(), base.clone()));
++                    }
++                    if (k + 1) % cols == 0 {
++                        ui.end_row();
++                    }
++                }
++            });
++        });
++    });
++}
++
++
++/// Trascinamento di una transizione Composer: l'etichetta segue il mouse, al rilascio sulla
++/// Timeline si applica sul taglio più vicino.
++fn composer_drag(app: &mut FilmcraftApp, ctx: &egui::Context) {
++    let Some((name, base)) = app.jarvis_ui.mh_drag.clone() else { return };
++    let (down, released, pos) = ctx.input(|i| (i.pointer.primary_down(), i.pointer.primary_released(), i.pointer.latest_pos()));
++    if let Some(p) = pos {
++        egui::Area::new(egui::Id::new("jarvis_mh_drag")).fixed_pos(p + egui::vec2(14.0, 14.0)).order(egui::Order::Tooltip).show(ctx, |ui| {
++            egui::Frame::popup(ui.style()).show(ui, |ui| {
++                ui.label(format!("🎞 {name}"));
++            });
++        });
++    }
++    if released || !down {
++        app.jarvis_ui.mh_drag = None;
++        let (Some(p), Some(r)) = (pos, app.last_timeline_rect) else { return };
++        if !r.contains(p) {
++            return;
++        }
++        let secs = app.ui.timeline.scroll + (p.x - r.min.x) as f64 / app.ui.timeline.pps;
++        let mut params = base;
++        params["time"] = json!(filmcraft_time::Tick::from_seconds_f64(secs.max(0.0)).0);
++        let res = crate::menus::invoke(app, ctx, "jarvis.composerItem", params);
++        app.jarvis_ui.msg = match res {
++            Ok(v) => done_msg("jarvis.composerItem", &v),
++            Err(e) => format!("⚠ {e}"),
++        };
++    } else {
++        ctx.request_repaint();
++    }
++}
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
-index c3fb34a..414df00 100644
+index c3fb34a..d8ac714 100644
 --- a/crates/ui-egui/src/lib.rs
 +++ b/crates/ui-egui/src/lib.rs
 @@ -73,6 +73,7 @@ pub mod state;
@@ -1837,6 +2507,15 @@ index c3fb34a..414df00 100644
      pub file_dialogs: panels::file_dialogs::FileDialogState,
      /// The native file dialog the host is showing ([`Self::pick`]).
      native_dialog: Option<native_dialogs::PendingDialog>,
+@@ -351,6 +353,8 @@ pub struct FilmcraftApp {
+     fonts_ready: bool,
+     pub integrated_titlebar: bool,
+     pub last_timeline_width: f32,
++    /// Jarvis: dove sta l'area delle clip della Timeline (per trascinarci le transizioni Composer)
++    pub last_timeline_rect: Option<egui::Rect>,
+     /// The sequence whose view `ui.timeline` holds, and that view as it was last exchanged with
+     /// `session.state.timeline_views` (see `sync_timeline_view`).
+     timeline_view_of: Option<filmcraft_engine::project::ItemId>,
 diff --git a/crates/ui-egui/src/menus.rs b/crates/ui-egui/src/menus.rs
 index 5f1e294..773f599 100644
 --- a/crates/ui-egui/src/menus.rs
@@ -1860,6 +2539,74 @@ index 5f1e294..773f599 100644
          "app.checkForUpdates" => {
              let _ = crate::updates_ui::check(app);
              return Ok(serde_json::Value::Null);
+diff --git a/crates/ui-egui/src/panels/timeline.rs b/crates/ui-egui/src/panels/timeline.rs
+index 13b90a6..95ef78b 100644
+--- a/crates/ui-egui/src/panels/timeline.rs
++++ b/crates/ui-egui/src/panels/timeline.rs
+@@ -308,6 +308,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
+     let content = Rect::from_min_max(pos2(rect.min.x + header_w, rect.min.y + TOP_H), pos2(rect.max.x - SCROLLBAR_H, rect.max.y - SCROLLBAR_H));
+     let ruler = Rect::from_min_max(pos2(content.min.x, rect.min.y + TOP_H - RULER_H), pos2(content.max.x, rect.min.y + TOP_H));
+     app.last_timeline_width = content.width();
++    app.last_timeline_rect = Some(content);
+     let painter = ui.painter().clone();
+     painter.rect_filled(rect, 0.0, t.panel_bg);
+ 
+diff --git a/crates/ui-egui/src/panels/timeline/interact.rs b/crates/ui-egui/src/panels/timeline/interact.rs
+index 7eb176f..700ac12 100644
+--- a/crates/ui-egui/src/panels/timeline/interact.rs
++++ b/crates/ui-egui/src/panels/timeline/interact.rs
+@@ -192,8 +192,21 @@ fn move_is_locked(seq: &Sequence, clips: &[ClipId], delta: i32) -> bool {
+     })
+ }
+ 
++thread_local! {
++    /// Jarvis: se la clip trascinata è video (true) o audio (false). Solo le clip di quel tipo
++    /// cambiano traccia: spostando il video su V2 l'audio resta su A1 (e viceversa).
++    static GRAB_VIDEO: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
++}
++
++fn grab_moves(seq: &Sequence, tid: TrackId) -> bool {
++    match GRAB_VIDEO.with(|g| g.get()) {
++        Some(v) => seq.video_tracks.iter().any(|t| t.id == tid) == v,
++        None => true,
++    }
++}
++
+ fn shift_track(seq: &Sequence, tid: TrackId, delta: i32) -> Option<TrackId> {
+-    if delta == 0 {
++    if delta == 0 || !grab_moves(seq, tid) {
+         return Some(tid);
+     }
+     for tracks in [&seq.video_tracks, &seq.audio_tracks] {
+@@ -286,7 +299,8 @@ fn wheel_scroll(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, layout: &
+             v.target_pps = (v.target_pps * f).clamp(min_pps(seq.duration().seconds(), app.last_timeline_width), 24_000.0);
+             app.tl.zoom_anchor = Some((anchor_t, p.x));
+         } else if w.delta != egui::Vec2::ZERO {
+-            let wheel_sideways = (app.session.prefs.timeline.mouse_scrolling == "horizontal") != w.command;
++            // Jarvis: come Premiere su Windows, la rotellina scorre la timeline di lato (Ctrl + rotellina: le tracce)
++            let wheel_sideways = !w.command;
+             let sideways = if w.delta.x.abs() > w.delta.y.abs() {
+                 Some(w.delta.x)
+             } else if wheel_sideways || w.shift {
+@@ -723,6 +737,7 @@ fn drag_update(app: &mut FilmcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
+                     (Some(c), Some(s)) if c.kind == s.kind => c.index as i32 - s.index as i32,
+                     _ => 0,
+                 };
++                GRAB_VIDEO.with(|g| g.set(Some(seq.video_tracks.iter().any(|t| t.id == start_track))));
+                 if move_is_locked(seq, &clips, track_delta) {
+                     ctx.set_cursor_icon(CursorIcon::NotAllowed);
+                     Some(Drag::Move { clips, grab_tick, start_track, offset: Tick::ZERO, track_delta: 0, new_track: None, copy: mods.alt })
+@@ -873,7 +888,9 @@ fn commit_drag(app: &mut FilmcraftApp, ctx: &egui::Context, resp: &egui::Respons
+             let r = match d {
+                 Drag::Move { clips, offset, track_delta, new_track, copy, .. } if offset != Tick::ZERO || track_delta != 0 || new_track.is_some() => {
+                     // #1104: dropped past the last track, the clips go onto a new one
+-                    let to = |tid| new_track.map_or_else(|| json!(shift_track(seq, tid, track_delta).unwrap_or(tid).0), |_| json!("new"));
++                    let to = |tid| {
++                        if new_track.is_some() && grab_moves(seq, tid) { json!("new") } else { json!(shift_track(seq, tid, track_delta).unwrap_or(tid).0) }
++                    };
+                     let mut seen = std::collections::HashSet::new();
+                     let moves: Vec<Value> = clips
+                         .iter()
 diff --git a/packaging/windows/package.ps1 b/packaging/windows/package.ps1
 index 0569139..2de011f 100644
 --- a/packaging/windows/package.ps1

@@ -17,7 +17,7 @@ def path_url(p):
     return "file://localhost" + quote(p, safe="/:")
 
 
-def build_xml(clips, src, info, layout, rendered, out_xml):
+def build_xml(clips, src, info, layout, rendered, out_xml, folder="Jarvis Clipper"):
     from .media import edit_rate
     fps, tb, ntsc = edit_rate(info)
     ntsc = "TRUE" if ntsc else "FALSE"
@@ -71,7 +71,11 @@ def build_xml(clips, src, info, layout, rendered, out_xml):
                   + "</effect></filter>")
         return crop + motion
 
-    x = ['<?xml version="1.0" encoding="UTF-8"?>', "<!DOCTYPE xmeml>", '<xmeml version="4"><bin><name>Jarvis Clipper</name><children>']
+    x = ['<?xml version="1.0" encoding="UTF-8"?>', "<!DOCTYPE xmeml>", f'<xmeml version="4"><bin><name>{escape(folder)}</name><children>']
+    # il video sorgente come master clip: così sta dentro la cartella
+    x.append(f'<clip id="mc_src"><name>{escape(src_name)}</name><duration>{src_frames}</duration>{rate}'
+             f'<media><video><track><clipitem id="mci_src"><name>{escape(src_name)}</name>'
+             + file_el("src", src, src_name, src_frames, sw, sh) + "</clipitem></track></video></media></clip>")
     for c in clips:
         a, b = F(c["start"]), F(c["end"])
         d = b - a

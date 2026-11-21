@@ -307,7 +307,7 @@ def render_previews(pid, base=0.0, only=None):
     set_job(pid, msg="Anteprime pronte")
 
 
-def job_export(pid, ids, do_render):
+def job_export(pid, ids, do_render, to_filmcraft=False):
     p = load(pid)
     sel = [c for c in p["clips"] if c["id"] in ids]
     if not sel:
@@ -323,10 +323,21 @@ def job_export(pid, ids, do_render):
             fp = os.path.join(out, f"Clip_{c['id']:02d}_{c['score']}_{safe}.mp4".replace(" ", "_"))
             render.render(p["src_path"], p["info"], p["layout"], c["start"], c["end"], fp, censor=clip_censor(p, c))
             rendered[c["id"]] = fp
-    stamp = time.strftime("%Y%m%d_%H%M")
-    xml = os.path.join(out, f"{p.get('name', 'clips')[:50]}_Premiere_{stamp}.xml")
-    premiere.build_xml(sel, p["src_path"], p["info"], p["layout"], rendered, xml)
-    update(pid, last_export={"xml": xml, "dir": out, "n": len(sel)})
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    kind = "FilmCraft" if to_filmcraft else "Premiere"
+    xml = os.path.join(out, f"{p.get('name', 'clips')[:50]}_{kind}_{stamp}.xml")
+    folder = f"Clip Jarvis {time.strftime('%H:%M')} - {p.get('name', '')[:40]}" if to_filmcraft else "Jarvis Clipper"
+    premiere.build_xml(sel, p["src_path"], p["info"], p["layout"], rendered, xml, folder=folder)
+    opened = False
+    if to_filmcraft:
+        try:
+            opened = filmcraft.open_xml(xml)
+        except Exception as e:
+            set_job(pid, log="FilmCraft non si apre: " + str(e))
+    update(pid, last_export={"xml": xml, "dir": out, "n": len(sel), "filmcraft": to_filmcraft, "opened": opened})
+    if opened:
+        set_job(pid, msg=f"Esportate {len(sel)} clip: si aprono in FilmCraft Jarvis", log="XML: " + xml)
+        return
     set_job(pid, msg=f"Esportate {len(sel)} clip", log="XML: " + xml)
     try:
         os.startfile(out)  # apre la cartella (Windows)
@@ -665,7 +676,7 @@ def api_clip(pid, cid):
 def api_export(pid):
     d = request.json or {}
     ids = [int(i) for i in d.get("ids", [])]
-    ok = start_job(pid, "export", lambda: job_export(pid, ids, d.get("render", True)))
+    ok = start_job(pid, "export", lambda: job_export(pid, ids, d.get("render", True), d.get("filmcraft", False)))
     return jsonify({"ok": ok})
 
 
