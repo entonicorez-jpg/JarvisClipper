@@ -29,6 +29,21 @@ def main():
 
 
 if __name__ == "__main__":
+    if "--transcribe" in sys.argv:
+        # chiamato da FilmCraft Jarvis per i sottotitoli: niente finestra
+        i = sys.argv.index("--transcribe")
+        try:
+            from core import fc_transcribe
+            ok = fc_transcribe.run(sys.argv[i + 1], sys.argv[i + 2])
+        except Exception:
+            traceback.print_exc()
+            try:
+                with open(sys.argv[i + 2] + ".error", "w", encoding="utf-8") as fh:
+                    fh.write(traceback.format_exc()[-2000:])
+            except Exception:
+                pass
+            ok = False
+        os._exit(0 if ok else 1)
     if "--selftest" in sys.argv:
         import selftest
         out = sys.argv[sys.argv.index("--selftest") + 1]

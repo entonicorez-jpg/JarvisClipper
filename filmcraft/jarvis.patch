@@ -209,10 +209,10 @@ index 44399e4..f4606e8 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..da4e1e5
+index 0000000..42058a3
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,1543 @@
+@@ -0,0 +1,1643 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -544,7 +544,9 @@ index 0000000..da4e1e5
 +    let size = (w.min(h) as f64) * if h > w { 0.085 } else { 0.082 } * scale;
 +    let max_chars = if n == 1 { 40 } else { ((w as f64 * 0.86) / (size * 0.72)).max(8.0) as usize };
 +    let pos = Vec2::new(w as f64 * xpos, h as f64 * ypos);
-+    let hold = Tick::from_seconds_f64(0.6);
++    // quanto resta a schermo dopo l'ultima parola (poco: deve sparire quando hai finito di dirla)
++    let hold = Tick::from_seconds_f64(if n == 1 { 0.12 } else { 0.25 });
++    let bridge = Tick::from_seconds_f64(0.3);
 +
 +    let texts: Vec<String> = words.iter().map(|x| {
 +        let t = clean(&x.text, upper);
@@ -559,7 +561,8 @@ index 0000000..da4e1e5
 +        let gstart = words[g[0]].start;
 +        let next = gs.get(gi + 1).map(|ng| words[ng[0]].start);
 +        let gend_max = words[*g.last().unwrap_or(&g[0])].end + hold;
-+        let gend = next.map_or(gend_max, |nx| nx.min(gend_max));
++        // se la frase dopo arriva subito, resta fino a lei (niente sfarfallio)
++        let gend = next.map_or(gend_max, |nx| if nx <= gend_max + bridge { nx } else { gend_max });
 +        let parts: Vec<&str> = g.iter().map(|&i| texts[i].as_str()).collect();
 +        let text = parts.join(" ");
 +        let mut offs = Vec::new();
@@ -574,6 +577,16 @@ index 0000000..da4e1e5
 +        for (k, &i) in g.iter().enumerate() {
 +            let a = if k == 0 { gstart } else { words[i].start };
 +            let b = if k + 1 < g.len() { words[g[k + 1]].start } else { gend };
++            // una parola alla volta: finisce quando finisci di dirla (se la pausa è breve resta fino alla prossima)
++            let b = if n == 1 {
++                let end = words[i].end + hold;
++                match next {
++                    Some(nx) if nx <= end + bridge => nx,
++                    _ => end.min(b),
++                }
++            } else {
++                b
++            };
 +            let hl = if st.highlight.is_empty() {
 +                None
 +            } else {
@@ -1216,6 +1229,8 @@ index 0000000..da4e1e5
 +    /// Trascrizioni già pronte (fatte da Jarvis Clipper con la scheda video): niente Whisper.
 +    pub pre: Vec<(filmcraft_project::ItemId, filmcraft_project::Transcript)>,
 +    pub items: Vec<(filmcraft_project::ItemId, filmcraft_media::SharedSource, Vec<(Tick, Tick)>)>,
++    /// Il file di ogni elemento (per farlo trascrivere a Jarvis Clipper).
++    pub paths: std::collections::HashMap<u64, String>,
 +    pub model: String,
 +    pub language: Option<String>,
 +    pub installed: Option<std::sync::Arc<dyn filmcraft_speech::Transcriber>>,
@@ -1310,6 +1325,69 @@ index 0000000..da4e1e5
 +    Some(tr)
 +}
 +
++/// Jarvis Clipper installato sul PC.
++fn jarvis_exe() -> Option<std::path::PathBuf> {
++    let la = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from)?;
++    let p = la.join("Programs").join("Jarvis Clipper").join("JarvisClipper.exe");
++    p.is_file().then_some(p)
++}
++
++/// Fa trascrivere a Jarvis Clipper (`--transcribe job out`) i pezzi `ranges` del file.
++fn jarvis_transcribe(exe: &std::path::Path, path: &str, ranges: &[(Tick, Tick)], lang: &str, progress: &dyn Fn(f32, String)) -> Option<filmcraft_project::Transcript> {
++    let dir = std::env::temp_dir().join(format!("filmcraft-jarvis-{}", std::process::id()));
++    std::fs::create_dir_all(&dir).ok()?;
++    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
++    let job = dir.join(format!("job-{stamp}.json"));
++    let out = dir.join(format!("out-{stamp}.json"));
++    let rs: Vec<[f64; 2]> = ranges.iter().map(|(a, b)| [a.seconds(), b.seconds()]).collect();
++    std::fs::write(&job, json!({"path": path, "ranges": rs, "lang": lang}).to_string()).ok()?;
++    let mut cmd = std::process::Command::new(exe);
++    cmd.arg("--transcribe").arg(&job).arg(&out);
++    #[cfg(windows)]
++    {
++        use std::os::windows::process::CommandExt;
++        cmd.creation_flags(0x0800_0000);
++    }
++    let mut child = cmd.spawn().ok()?;
++    let prog = std::path::PathBuf::from(format!("{}.progress", out.display()));
++    let started = std::time::Instant::now();
++    let status = loop {
++        if let Ok(Some(st)) = child.try_wait() {
++            break st;
++        }
++        if let Ok(t) = std::fs::read_to_string(&prog) {
++            let (f, m) = t.split_once(' ').unwrap_or((t.as_str(), ""));
++            progress(f.trim().parse::<f32>().unwrap_or(0.0).clamp(0.0, 1.0) * 0.98, format!("Jarvis: {m}"));
++        }
++        // al massimo un'ora (la prima volta scarica il modello)
++        if started.elapsed() > std::time::Duration::from_secs(3600) {
++            let _ = child.kill();
++            return None;
++        }
++        std::thread::sleep(std::time::Duration::from_millis(300));
++    };
++    if !status.success() {
++        return None;
++    }
++    let v: Value = serde_json::from_str(&std::fs::read_to_string(&out).ok()?).ok()?;
++    let _ = std::fs::remove_file(&job);
++    let _ = std::fs::remove_file(&out);
++    let _ = std::fs::remove_file(&prog);
++    let mut words: Vec<filmcraft_project::Word> = v["words"]
++        .as_array()?
++        .iter()
++        .filter_map(|w| {
++            let t = w["w"].as_str()?.trim();
++            let (a, b) = (w["s"].as_f64()?, w["e"].as_f64()?);
++            (!t.is_empty() && b >= a).then(|| filmcraft_project::Word::new(t, Tick::from_seconds_f64(a), Tick::from_seconds_f64(b.max(a + 0.02))))
++        })
++        .collect();
++    drop_hallucinations(&mut words);
++    let mut tr = filmcraft_project::Transcript { language: lang.to_string(), source: "jarvis-clipper".into(), speakers: Vec::new(), words };
++    tr.normalize();
++    Some(tr)
++}
++
 +/// Frasi che Whisper si inventa sul silenzio o sui suoni.
 +fn hallucination(text: &str) -> bool {
 +    let t = text.to_lowercase();
@@ -1350,6 +1428,7 @@ index 0000000..da4e1e5
 +    collect_audio(&s.project, q, None, &mut per, 0);
 +    let mut items = Vec::new();
 +    let mut pre = Vec::new();
++    let mut paths = std::collections::HashMap::new();
 +    for (id, mut rs) in per {
 +        let item = filmcraft_project::ItemId(id);
 +        if !bool_p(p, "retranscribe").unwrap_or(false)
@@ -1370,6 +1449,11 @@ index 0000000..da4e1e5
 +                _ => merged.push((a, b)),
 +            }
 +        }
++        if let Some(filmcraft_project::ItemKind::Media(m)) = s.project.item(item).map(|x| &x.kind)
++            && let filmcraft_project::MediaRef::File { path } = &m.media
++        {
++            paths.insert(item.0, path.clone());
++        }
 +        items.push((item, src, merged));
 +    }
 +    if items.is_empty() && pre.is_empty() {
@@ -1377,6 +1461,7 @@ index 0000000..da4e1e5
 +    }
 +    Ok(Some(CaptionJob {
 +        pre,
++        paths,
 +        items,
 +        model: str_p(p, "model").unwrap_or("whisper-small").to_string(),
 +        language: Some(str_p(p, "language").unwrap_or("it").to_string()).filter(|l| l != "auto"),
@@ -1386,9 +1471,24 @@ index 0000000..da4e1e5
 +
 +/// Fa la trascrizione (da chiamare in un thread). `progress(frazione, messaggio)`.
 +pub fn run_captions(mut job: CaptionJob, progress: &(dyn Fn(f32, String) + Sync)) -> std::result::Result<Vec<(filmcraft_project::ItemId, filmcraft_project::Transcript)>, String> {
-+    let pre = std::mem::take(&mut job.pre);
++    let mut pre = std::mem::take(&mut job.pre);
++    // Jarvis Clipper installato: trascrive lui con la scheda video e il modello più preciso
++    if let Some(exe) = jarvis_exe() {
++        let n = job.items.len().max(1);
++        let mut rest = Vec::new();
++        for (k, (item, src, ranges)) in std::mem::take(&mut job.items).into_iter().enumerate() {
++            let got = job.paths.get(&item.0).and_then(|path| {
++                jarvis_transcribe(&exe, path, &ranges, job.language.as_deref().unwrap_or("it"), &|f, m| progress((k as f32 + f) / n as f32, m))
++            });
++            match got {
++                Some(tr) => pre.push((item, tr)),
++                None => rest.push((item, src, ranges)),
++            }
++        }
++        job.items = rest;
++    }
 +    if job.items.is_empty() {
-+        progress(1.0, "Uso la trascrizione di Jarvis Clipper".into());
++        progress(1.0, "Trascrizione pronta".into());
 +        return Ok(pre);
 +    }
 +    let t: std::sync::Arc<dyn filmcraft_speech::Transcriber> = match job.installed {
