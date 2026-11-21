@@ -263,9 +263,9 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
           <div>
             <div class="stage" id="stage"><img id="frame" alt=""><canvas id="ov"></canvas></div>
             <div class="thumbs" id="thumbs"></div>
-            <div class="legend"><span><i style="background:var(--hot)"></i>CAM (va sopra)</span><span><i style="background:var(--acc)"></i>GIOCO (va sotto)</span><span>Trascina per spostare · angolo in basso a destra per ridimensionare</span></div>
+            <div class="legend"><span><i style="background:var(--hot)"></i>CAM (va sopra)</span><span><i style="background:var(--acc)"></i>GIOCO (va sotto)</span><span id="layHint">Trascina per spostare · angolo in basso a destra per ridimensionare</span></div>
             <div class="ctl">
-              <div class="seg" id="modeSeg"><button data-m="split" class="on">Cam sopra + gioco sotto</button><button data-m="full">Solo gioco</button></div>
+              <div class="seg" id="modeSeg"><button data-m="split" class="on">Cam sopra + gioco sotto</button><button data-m="bg">Cam libera + sfondo sfumato</button><button data-m="full">Solo gioco</button></div>
               <label id="splitLbl">Altezza cam <input type="range" id="split" min="25" max="55" step="1" value="40"> <span id="splitV">40%</span></label>
               <button class="sm" onclick="autoCam()">🎯 Trova la cam da solo</button>
             </div>
@@ -588,6 +588,7 @@ function setupLayout(){
   L.mode=L.mode||'split';
   document.querySelectorAll('#modeSeg button').forEach(b=>b.classList.toggle('on',b.dataset.m===L.mode));
   $('#splitLbl').style.display=L.mode==='full'?'none':'';
+  layHint();
   const cfgN=window.CFG||{}; if(cfgN.max_clips) $('#oN').value=cfgN.max_clips;
 }
 function setFrame(i){curFrame=i;setupLayout()}
@@ -597,10 +598,11 @@ function fit(r,a){ // tieni centro, adatta all'aspetto, resta nel frame
   if(h>I.h){h=I.h;w=h*a} if(w>I.w){w=I.w;h=w/a}
   return{x:Math.min(Math.max(0,cx-w/2),I.w-w),y:Math.min(Math.max(0,cy-h/2),I.h-h),w,h}
 }
-function refit(){if(L.cam)L.cam=fit(L.cam,camAspect());L.game=fit(L.game,gameAspect());layDirty=true;drawOv();drawPhone()}
+function refit(){if(L.cam&&L.mode!=='bg')L.cam=fit(L.cam,camAspect());L.game=fit(L.game,gameAspect());layDirty=true;drawOv();drawPhone()}
 document.querySelectorAll('#modeSeg button').forEach(b=>b.onclick=()=>{L.mode=b.dataset.m;
   document.querySelectorAll('#modeSeg button').forEach(x=>x.classList.toggle('on',x===b));
-  $('#splitLbl').style.display=L.mode==='full'?'none':'';if(L.mode==='split'&&!L.cam)L.cam=defaultCam();refit();saveLayout()});
+  $('#splitLbl').style.display=L.mode==='full'?'none':'';if(L.mode!=='full'&&!L.cam)L.cam=defaultCam();layHint();refit();saveLayout()});
+function layHint(){const h=$('#layHint');if(h)h.textContent=L.mode==='bg'?'Cam libera: ritaglia la cam come vuoi (angolo in basso a destra), dietro ci va il gioco sfumato':'Trascina per spostare · angolo in basso a destra per ridimensionare'}
 $('#split').oninput=e=>{L.split=e.target.value/100;$('#splitV').textContent=e.target.value+'%';refit()};
 $('#split').onchange=()=>saveLayout();
 function rects(){const a=[{k:'game',c:'#53fc18'}];if(L.mode!=='full')a.push({k:'cam',c:'#ff3d5a'});return a}
@@ -619,7 +621,15 @@ function drawPhone(){
   const x=ph.getContext('2d'),s=img.naturalWidth/P.info.w;x.fillStyle='#000';x.fillRect(0,0,540,960);
   const camH=L.mode==='full'?0:Math.round(960*L.split);
   const g=L.game;x.drawImage(img,g.x*s,g.y*s,g.w*s,g.h*s,0,camH,540,960-camH);
-  if(camH){const c=L.cam;x.drawImage(img,c.x*s,c.y*s,c.w*s,c.h*s,0,0,540,camH)}
+  if(camH&&L.mode==='bg'){
+    // sfondo: il gioco ingrandito e sfumato, poi la cam come l'hai ritagliata, al centro
+    const k=Math.max(540/g.w,camH/g.h),bw=540/k,bh=camH/k;
+    x.save();x.filter='blur(12px) brightness(0.9) saturate(1.1)';
+    x.drawImage(img,(g.x+(g.w-bw)/2)*s,(g.y+(g.h-bh)/2)*s,bw*s,bh*s,-20,-20,580,camH+40);x.restore();
+    x.fillStyle='#000';x.fillRect(0,camH,540,960-camH);x.drawImage(img,g.x*s,g.y*s,g.w*s,g.h*s,0,camH,540,960-camH);
+    const c=L.cam,m=0.05,fw=540*(1-2*m),fh=camH*(1-2*m),z=Math.min(fw/c.w,fh/c.h),w=c.w*z,h=c.h*z;
+    x.drawImage(img,c.x*s,c.y*s,c.w*s,c.h*s,(540-w)/2,(camH-h)/2,w,h)}
+  else if(camH){const c=L.cam;x.drawImage(img,c.x*s,c.y*s,c.w*s,c.h*s,0,0,540,camH)}
 }
 function pos(e){const b=ov.getBoundingClientRect(),k=P.info.w/b.width;return{x:(e.clientX-b.left)*k,y:(e.clientY-b.top)*k,k}}
 ov.onmousedown=e=>{const p=pos(e),hs=16*p.k;
@@ -628,12 +638,13 @@ ov.onmousedown=e=>{const p=pos(e),hs=16*p.k;
     if(p.x>=r.x&&p.x<=r.x+r.w&&p.y>=r.y&&p.y<=r.y+r.h){drag={key,mode:'move',r:{...r},p};return}}};
 window.addEventListener('mousemove',e=>{if(!drag)return;const p=pos(e),I=P.info,a=drag.key==='cam'?camAspect():gameAspect();let r={...drag.r};
   if(drag.mode==='move'){r.x=Math.min(Math.max(0,r.x+p.x-drag.p.x),I.w-r.w);r.y=Math.min(Math.max(0,r.y+p.y-drag.p.y),I.h-r.h)}
+  else if(drag.key==='cam'&&L.mode==='bg'){r.w=Math.min(Math.max(60,drag.r.w+(p.x-drag.p.x)),I.w-r.x);r.h=Math.min(Math.max(40,drag.r.h+(p.y-drag.p.y)),I.h-r.y)}
   else{let w=Math.max(60,drag.r.w+(p.x-drag.p.x));w=Math.min(w,I.w-r.x,(I.h-r.y)*a);r.w=w;r.h=w/a}
   L[drag.key]=r;layDirty=true;drawOv();drawPhone()});
 window.addEventListener('mouseup',()=>{if(drag){drag=null;saveLayout()}});
 window.addEventListener('resize',()=>{drawOv()});
 async function autoCam(){const r=await api(`/api/project/${PID}/autocam`,{split:L.split});
-  if(r.cam){L.cam=fit(r.cam,camAspect());L.mode='split';drawOv();drawPhone();saveLayout()}else alert('Non ho trovato la faccia nei frame: sposta il riquadro rosso a mano.')}
+  if(r.cam){L.cam=L.mode==='bg'?r.cam:fit(r.cam,camAspect());if(L.mode==='full')L.mode='split';drawOv();drawPhone();saveLayout()}else alert('Non ho trovato la faccia nei frame: sposta il riquadro rosso a mano.')}
 async function saveLayout(rerender){
   const body=JSON.parse(JSON.stringify(L));if(body.mode==='full')body.cam=null;
   await api(`/api/project/${PID}/layout${rerender?'?rerender=1':''}`,body);

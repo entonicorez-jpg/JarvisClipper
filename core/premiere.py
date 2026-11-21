@@ -46,9 +46,13 @@ def build_xml(clips, src, info, layout, rendered, out_xml, folder="Jarvis Clippe
         return (f"<parameter><parameterid>{pid}</parameterid><name>{name}</name><valuemin>{lo}</valuemin>"
                 f"<valuemax>{hi}</valuemax><value>{val}</value></parameter>")
 
-    def layer_filters(r, target_cy):
+    def layer_filters(r, target_cy, fit=None, blur=0):
         r = clamp_rect(r, info)
         scale = OUT_W / r["w"] * 100.0
+        if fit:  # (larghezza, altezza, "contain"|"cover") del riquadro dove deve stare
+            fw, fh, how = fit
+            k = (min if how == "contain" else max)(fw / r["w"], fh / r["h"])
+            scale = k * 100.0
         s = scale / 100.0
         dx = r["x"] + r["w"] / 2 - sw / 2
         dy = r["y"] + r["h"] / 2 - sh / 2
@@ -69,7 +73,17 @@ def build_xml(clips, src, info, layout, rendered, out_xml, folder="Jarvis Clippe
                   + "<parameter><parameterid>center</parameterid><name>Center</name>"
                   f"<value><horiz>{horiz:.6f}</horiz><vert>{vert:.6f}</vert></value></parameter>"
                   + "</effect></filter>")
-        return crop + motion
+        extra = ""
+        if blur:
+            extra = ("<filter><effect><name>Gaussian Blur</name><effectid>gaussian_blur</effectid><effectcategory>Blur &amp; Sharpen</effectcategory>"
+                     "<effecttype>filter</effecttype><mediatype>video</mediatype>"
+                     + param("blurriness", "Blurriness", blur, 0, 1000)
+                     + "<parameter><parameterid>repeat_edge</parameterid><name>Repeat Edge Pixels</name><value>TRUE</value></parameter>"
+                     + "</effect></filter>"
+                     + "<filter><effect><name>Brightness &amp; Contrast</name><effectid>brightness_contrast</effectid>"
+                     "<effecttype>filter</effecttype><mediatype>video</mediatype>"
+                     + param("brightness", "Brightness", -8, -100, 100) + "</effect></filter>")
+        return crop + motion + extra
 
     x = ['<?xml version="1.0" encoding="UTF-8"?>', "<!DOCTYPE xmeml>", f'<xmeml version="4"><bin><name>{escape(folder)}</name><children>']
     # il video sorgente come master clip: così sta dentro la cartella
@@ -90,9 +104,15 @@ def build_xml(clips, src, info, layout, rendered, out_xml, folder="Jarvis Clippe
             return (f'<track><clipitem id="{cid}"><name>{escape(label)}</name><enabled>TRUE</enabled>'
                     f"<duration>{src_frames}</duration>{rate}<start>0</start><end>{d}</end><in>{a}</in><out>{b}</out>"
                     + file_el("src", src, src_name, src_frames, sw, sh) + filt + "</clipitem></track>")
+        bgmode = cam_h and layout.get("mode") == "bg"
+        if bgmode:
+            # sfondo: il gioco ingrandito e sfumato dietro la cam (sotto al gioco, che ne copre il resto)
+            x.append(vclip(f"s{c['id']}", "SFONDO SFUMATO", layer_filters(layout.get("bg") or layout["game"], cam_h / 2, (OUT_W, cam_h, "cover"), blur=60)))
         x.append(vclip(f"g{c['id']}", "GIOCO", layer_filters(layout["game"], cam_h + game_h / 2)))
         if cam_h:
-            x.append(vclip(f"c{c['id']}", "CAM", layer_filters(layout["cam"], cam_h / 2)))
+            m = float(layout.get("margin", 0.05))
+            fit = (OUT_W * (1 - 2 * m), cam_h * (1 - 2 * m), "contain") if bgmode else None
+            x.append(vclip(f"c{c['id']}", "CAM", layer_filters(layout["cam"], cam_h / 2, fit)))
         rp = rendered.get(c["id"]) if rendered else None
         if rp:
             rf = f"r{c['id']}"
@@ -101,12 +121,13 @@ def build_xml(clips, src, info, layout, rendered, out_xml, folder="Jarvis Clippe
                      + file_el(rf, rp, os.path.basename(rp), d, OUT_W, OUT_H) + "</clipitem></track>")
         x.append("</video><audio>")
         if info.get("has_audio", True):
-            for ch in range(1, min(info["ch"], 2) + 1):
-                x.append(f'<track><clipitem id="a{c["id"]}_{ch}"><name>{escape(src_name)}</name><enabled>TRUE</enabled>'
-                         f"<duration>{src_frames}</duration>{rate}<start>0</start><end>{d}</end><in>{a}</in><out>{b}</out>"
-                         + file_el("src", src, src_name, src_frames, sw, sh)
-                         + f"<sourcetrack><mediatype>audio</mediatype><trackindex>{ch}</trackindex></sourcetrack>"
-                         "</clipitem></track>")
+            # una sola traccia stereo (non sinistra/destra separate)
+            x.append(('<track premiereTrackType="Stereo">' if info.get("ch", 2) >= 2 else "<track>")
+                     + f'<clipitem id="a{c["id"]}"><name>{escape(src_name)}</name><enabled>TRUE</enabled>'
+                     f"<duration>{src_frames}</duration>{rate}<start>0</start><end>{d}</end><in>{a}</in><out>{b}</out>"
+                     + file_el("src", src, src_name, src_frames, sw, sh)
+                     + "<sourcetrack><mediatype>audio</mediatype><trackindex>1</trackindex></sourcetrack>"
+                     "</clipitem></track>")
         x.append("</audio></media></sequence>")
     x.append("</children></bin></xmeml>")
     with open(out_xml, "w", encoding="utf-8") as f:

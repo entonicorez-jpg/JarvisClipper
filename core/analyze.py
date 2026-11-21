@@ -340,6 +340,8 @@ def analyze(path, info, layout, opts, progress, log, stop=lambda: False):
         if tr:
             try:
                 segs = tr.transcribe(path, ws + rs, we - ws, beam)
+                from . import sidecar
+                sidecar.save(path, segs, ws + rs, we + rs)
                 for sg in segs:
                     sg["s"] -= rs; sg["e"] -= rs
                     for w in sg["words"]:

@@ -209,10 +209,10 @@ index 44399e4..f4606e8 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..6ff2324
+index 0000000..da4e1e5
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,1488 @@
+@@ -0,0 +1,1543 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -397,6 +397,7 @@ index 0000000..6ff2324
 +pub const ANIMS: &[(&str, &str)] = &[
 +    ("pop_osc", "Pop + oscillazione"),
 +    ("pop", "Pop"),
++    ("pop_su", "Pop dal basso (salta su)"),
 +    ("rimbalzo", "Rimbalzo dal basso"),
 +    ("scivola", "Scivola su"),
 +    ("tremolio", "Pop + tremolio continuo"),
@@ -433,6 +434,12 @@ index 0000000..6ff2324
 +            // sbuca a pop e poi fa una leggera oscillazione prima di fermarsi
 +            keys(e, "scale", fl(100.0), &[(0, fl(45.0), O), (3, fl(116.0), S), (6, fl(95.0), S), (8, fl(102.0), S), (10, fl(100.0), L)], f);
 +            keys(e, "rotation", fl(tilt), &[(0, fl(tilt - 9.0), S), (3, fl(tilt + 6.0), S), (6, fl(tilt - 3.5), S), (9, fl(tilt + 1.5), S), (12, fl(tilt), L)], f);
++        }
++        "pop_su" if entrance => {
++            // salta su dal basso ingrandendosi, supera un filo e si assesta
++            keys(e, "scale", fl(100.0), &[(0, fl(40.0), O), (4, fl(112.0), S), (7, fl(97.0), S), (9, fl(100.0), L)], f);
++            keys(e, "position", pt(0.0), &[(0, pt(0.7), O), (4, pt(-0.1), S), (7, pt(0.03), S), (9, pt(0.0), L)], f);
++            keys(e, "opacity", fl(100.0), &[(0, fl(0.0), O), (2, fl(100.0), L)], f);
 +        }
 +        "rimbalzo" if entrance => {
 +            keys(e, "position", pt(0.0), &[(0, pt(0.55), O), (4, pt(-0.12), S), (7, pt(0.04), S), (9, pt(0.0), L)], f);
@@ -1024,7 +1031,7 @@ index 0000000..6ff2324
 +        spec(
 +            "jarvis.autoCaptions",
 +            "Jarvis: Sottotitoli animati",
-+            r#"{"style":"jarvis|hormozi|parola|beast|box|neon|minimal"?,"font":"Provicali"?,"words":n?,"upper":bool?,"censor":bool=true,"pop":bool?,"anim":"pop_osc|pop|rimbalzo|scivola|tremolio|zoom|nessuna"?,"tilt":bool?,"x":f?,"y":f?,"size":percent?,"model":"whisper-small"?,"language":"it"?,"replace":bool=true,"retranscribe":bool?}"#,
++            r#"{"style":"jarvis|hormozi|parola|beast|box|neon|minimal"?,"font":"Provicali"?,"words":n?,"upper":bool?,"censor":bool=true,"pop":bool?,"anim":"pop_osc|pop|pop_su|rimbalzo|scivola|tremolio|zoom|nessuna"?,"tilt":bool?,"x":f?,"y":f?,"size":percent?,"model":"whisper-small"?,"language":"it"?,"replace":bool=true,"retranscribe":bool?}"#,
 +            auto_captions,
 +        ),
 +        spec(
@@ -1206,6 +1213,8 @@ index 0000000..6ff2324
 +
 +/// Lavoro di trascrizione preparato sul thread dell'interfaccia e fatto in background.
 +pub struct CaptionJob {
++    /// Trascrizioni già pronte (fatte da Jarvis Clipper con la scheda video): niente Whisper.
++    pub pre: Vec<(filmcraft_project::ItemId, filmcraft_project::Transcript)>,
 +    pub items: Vec<(filmcraft_project::ItemId, filmcraft_media::SharedSource, Vec<(Tick, Tick)>)>,
 +    pub model: String,
 +    pub language: Option<String>,
@@ -1268,6 +1277,39 @@ index 0000000..6ff2324
 +    }
 +}
 +
++/// La trascrizione che Jarvis Clipper salva accanto al video (`<video>.jarvis-words.json`:
++/// `{"words":[{"w","s","e"}]}`, secondi del file). Si usa solo se copre i pezzi che servono.
++fn jarvis_sidecar(s: &Session, item: filmcraft_project::ItemId, ranges: &[(Tick, Tick)]) -> Option<filmcraft_project::Transcript> {
++    let filmcraft_project::ItemKind::Media(m) = &s.project.item(item)?.kind else { return None };
++    let filmcraft_project::MediaRef::File { path } = &m.media else { return None };
++    let txt = std::fs::read_to_string(format!("{path}.jarvis-words.json")).ok()?;
++    let v: Value = serde_json::from_str(&txt).ok()?;
++    let covered: Vec<(f64, f64)> = v["ranges"].as_array()?.iter().filter_map(|r| Some((r[0].as_f64()?, r[1].as_f64()?))).collect();
++    // ogni pezzo usato deve stare (quasi) tutto dentro le parti già trascritte
++    for (a, b) in ranges {
++        let (a, b) = (a.seconds() + 0.6, b.seconds() - 0.6);
++        if b > a && !covered.iter().any(|(ca, cb)| *ca <= a + 0.5 && *cb >= b - 0.5) {
++            return None;
++        }
++    }
++    let mut words: Vec<filmcraft_project::Word> = v["words"]
++        .as_array()?
++        .iter()
++        .filter_map(|w| {
++            let t = w["w"].as_str()?.trim();
++            let (a, b) = (w["s"].as_f64()?, w["e"].as_f64()?);
++            (!t.is_empty() && b >= a).then(|| filmcraft_project::Word::new(t, Tick::from_seconds_f64(a), Tick::from_seconds_f64(b.max(a + 0.02))))
++        })
++        .collect();
++    drop_hallucinations(&mut words);
++    if words.is_empty() {
++        return None;
++    }
++    let mut tr = filmcraft_project::Transcript { language: "it".into(), source: "jarvis-clipper".into(), speakers: Vec::new(), words };
++    tr.normalize();
++    Some(tr)
++}
++
 +/// Frasi che Whisper si inventa sul silenzio o sui suoni.
 +fn hallucination(text: &str) -> bool {
 +    let t = text.to_lowercase();
@@ -1307,8 +1349,15 @@ index 0000000..6ff2324
 +    let mut per: std::collections::BTreeMap<u64, Vec<(Tick, Tick)>> = Default::default();
 +    collect_audio(&s.project, q, None, &mut per, 0);
 +    let mut items = Vec::new();
++    let mut pre = Vec::new();
 +    for (id, mut rs) in per {
 +        let item = filmcraft_project::ItemId(id);
++        if !bool_p(p, "retranscribe").unwrap_or(false)
++            && let Some(tr) = jarvis_sidecar(s, item, &rs)
++        {
++            pre.push((item, tr));
++            continue;
++        }
 +        let Some(src) = s.source(item) else { continue };
 +        if !src.info().has_audio() {
 +            continue;
@@ -1323,10 +1372,11 @@ index 0000000..6ff2324
 +        }
 +        items.push((item, src, merged));
 +    }
-+    if items.is_empty() {
++    if items.is_empty() && pre.is_empty() {
 +        return Err(EngineError::Other("nessun audio nella sequenza".into()));
 +    }
 +    Ok(Some(CaptionJob {
++        pre,
 +        items,
 +        model: str_p(p, "model").unwrap_or("whisper-small").to_string(),
 +        language: Some(str_p(p, "language").unwrap_or("it").to_string()).filter(|l| l != "auto"),
@@ -1335,7 +1385,12 @@ index 0000000..6ff2324
 +}
 +
 +/// Fa la trascrizione (da chiamare in un thread). `progress(frazione, messaggio)`.
-+pub fn run_captions(job: CaptionJob, progress: &(dyn Fn(f32, String) + Sync)) -> std::result::Result<Vec<(filmcraft_project::ItemId, filmcraft_project::Transcript)>, String> {
++pub fn run_captions(mut job: CaptionJob, progress: &(dyn Fn(f32, String) + Sync)) -> std::result::Result<Vec<(filmcraft_project::ItemId, filmcraft_project::Transcript)>, String> {
++    let pre = std::mem::take(&mut job.pre);
++    if job.items.is_empty() {
++        progress(1.0, "Uso la trascrizione di Jarvis Clipper".into());
++        return Ok(pre);
++    }
 +    let t: std::sync::Arc<dyn filmcraft_speech::Transcriber> = match job.installed {
 +        Some(t) => t,
 +        None => {
@@ -1360,7 +1415,7 @@ index 0000000..6ff2324
 +    let sr = filmcraft_speech::SAMPLE_RATE as i64;
 +    let total: f64 = job.items.iter().flat_map(|(_, _, r)| r.iter()).map(|(a, b)| (b.0 - a.0) as f64).sum::<f64>().max(1.0);
 +    let mut done = 0.0f64;
-+    let mut out = Vec::new();
++    let mut out = pre;
 +    for (item, src, ranges) in job.items {
 +        let mut words = Vec::new();
 +        let mut lang = job.language.clone().unwrap_or_else(|| "it".into());
@@ -1956,10 +2011,10 @@ index fd5f66c..fc6ef4d 100644
  	Add Guide…	Aggiungi guida…
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..02b5e0a
+index 0000000..4b8cb36
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
-@@ -0,0 +1,889 @@
+@@ -0,0 +1,902 @@
 +//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
 +
 +use serde_json::{Value, json};
@@ -2056,6 +2111,12 @@ index 0000000..02b5e0a
 +
 +pub(crate) fn toggle(app: &mut FilmcraftApp) {
 +    app.jarvis_ui.open = !app.jarvis_ui.open;
++}
++
++/// Apre Jarvis Composer su una scheda (0 Composer, 1 Sottotitoli, 2 Transizioni ed effetti).
++pub(crate) fn open_tab(app: &mut FilmcraftApp, tab: usize) {
++    app.jarvis_ui.open = true;
++    app.jarvis_ui.tab = tab.min(2);
 +}
 +
 +pub(crate) fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
@@ -2194,6 +2255,7 @@ index 0000000..02b5e0a
 +                run = Some(("jarvis.captionsBg".into(), p, String::new()));
 +            }
 +            ui.small("Finiscono sulla traccia \"Sottotitoli Jarvis\": ogni pezzo si modifica come un testo normale.");
++            ui.small("Se il video viene da Jarvis Clipper uso la sua trascrizione (più precisa e immediata); \"Ritrascrivi\" la rifà da capo.");
 +            }
 +            if st.tab == 2 {
 +            ui.heading("✂ Montaggio");
@@ -2744,6 +2806,12 @@ index 0000000..02b5e0a
 +            0.0,
 +            1.0,
 +        ),
++        "pop_su" => (
++            lerp(&[(0.0, 40.0), (4.0, 112.0), (7.0, 97.0), (9.0, 100.0)]) / 100.0,
++            tilt,
++            lerp(&[(0.0, 0.7), (4.0, -0.1), (7.0, 0.03), (9.0, 0.0)]),
++            lerp(&[(0.0, 0.0), (2.0, 1.0)]),
++        ),
 +        "rimbalzo" => (1.0, tilt, lerp(&[(0.0, 0.55), (4.0, -0.12), (7.0, 0.04), (9.0, 0.0)]), lerp(&[(0.0, 0.0), (3.0, 1.0)])),
 +        "scivola" => (1.0, tilt, lerp(&[(0.0, 0.4), (5.0, 0.0)]), lerp(&[(0.0, 0.0), (4.0, 1.0)])),
 +        "tremolio" => {
@@ -2901,6 +2969,255 @@ index 5f1e294..773f599 100644
          "app.checkForUpdates" => {
              let _ = crate::updates_ui::check(app);
              return Ok(serde_json::Value::Null);
+diff --git a/crates/ui-egui/src/panels/import_mode.rs b/crates/ui-egui/src/panels/import_mode.rs
+index 4ec9555..26bdaf5 100644
+--- a/crates/ui-egui/src/panels/import_mode.rs
++++ b/crates/ui-egui/src/panels/import_mode.rs
+@@ -8,72 +8,189 @@ use crate::FilmcraftApp;
+ use crate::theme::Tokens;
+ 
+ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
++    jarvis_home(app, ui, rect);
++}
++
++/// Home di FilmCraft Jarvis: azioni grandi e chiare, progetti recenti come schede, strumenti Jarvis.
++fn jarvis_home(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
+     let t = app.tokens;
+-    ui.painter().rect_filled(rect, t.radius, t.panel_bg);
+-    ui.painter().text(rect.min + vec2(24.0, 30.0), Align2::LEFT_CENTER, tl!("Import"), Tokens::semibold(22.0), t.text);
+-    ui.painter().text(
+-        rect.min + vec2(24.0, 58.0),
+-        Align2::LEFT_CENTER,
+-        tl!("Add media to your project. Drop files or folders anywhere in the window, or choose a source below."),
+-        Tokens::ui(13.0),
+-        t.text_dim,
+-    );
+     let ctx = ui.ctx().clone();
+-    let cards = [
+-        (tl!("Browse files…"), "file.import", tl!("Movies, audio and stills from disk")),
+-        (tl!("Demo footage"), "file.importDemoFootage", tl!("Six procedural 1080p clips with sound")),
+-        (tl!("Demo project"), "file.openDemoProject", tl!("A cut sequence with transitions, effects and music")),
+-        (tl!("Bars and Tone"), "file.newBarsAndTone", tl!("SMPTE HD bars with 1 kHz reference tone")),
++    let p = ui.painter().clone();
++    p.rect_filled(rect, t.radius, t.panel_bg);
++    // fascia in alto con un velo viola
++    let band = Rect::from_min_size(rect.min, vec2(rect.width(), 128.0));
++    let mesh = {
++        let mut m = egui::Mesh::default();
++        let c1 = Color32::from_rgba_unmultiplied(110, 70, 230, 70);
++        let c2 = Color32::from_rgba_unmultiplied(110, 70, 230, 0);
++        m.colored_vertex(band.left_top(), c1);
++        m.colored_vertex(band.right_top(), Color32::from_rgba_unmultiplied(60, 140, 255, 40));
++        m.colored_vertex(band.right_bottom(), c2);
++        m.colored_vertex(band.left_bottom(), c2);
++        m.add_triangle(0, 1, 2);
++        m.add_triangle(0, 2, 3);
++        m
++    };
++    p.add(egui::Shape::mesh(mesh));
++    let x0 = rect.min.x + 36.0;
++    p.text(pos2(x0, rect.min.y + 46.0), Align2::LEFT_CENTER, "FilmCraft Jarvis", Tokens::semibold(30.0), t.text);
++    p.text(pos2(x0, rect.min.y + 84.0), Align2::LEFT_CENTER, "Bentornato! Cosa vuoi fare?", Tokens::ui(15.0), t.text_dim);
++    let ver = std::env::current_exe().ok().and_then(|e| std::fs::read_to_string(e.with_file_name("jarvis_tag.txt")).ok()).map(|v| v.trim().to_string()).unwrap_or_default();
++    if !ver.is_empty() {
++        p.text(pos2(rect.max.x - 24.0, rect.min.y + 30.0), Align2::RIGHT_CENTER, ver, Tokens::ui(11.0), t.text_dim);
++    }
++
++    let recents: Vec<String> = app.session.prefs.general.recent_projects.iter().take(8).cloned().collect();
++    // ---- azioni principali
++    enum Act {
++        Cmd(&'static str, serde_json::Value),
++        Open(String),
++    }
++    let mut acts: Vec<(&str, String, crate::icons::Icon, Act, bool)> = Vec::new();
++    if let Some(last) = recents.first() {
++        acts.push(("Continua l'ultimo progetto", crate::menus::recent_name(last), crate::icons::Icon::Play, Act::Open(last.clone()), true));
++    }
++    acts.push(("Nuovo progetto", "Parti da zero".into(), crate::icons::Icon::NewItem, Act::Cmd("file.newProject", json!({})), recents.is_empty()));
++    acts.push(("Apri progetto…", "Un progetto .fcproj dal PC".into(), crate::icons::Icon::Folder, Act::Cmd("file.open", json!({})), false));
++    acts.push(("Importa video…", "Video, audio, immagini o XML di Jarvis".into(), crate::icons::Icon::Import, Act::Cmd("file.import", json!({})), false));
++    acts.push((
++        "Nuova sequenza verticale",
++        "9:16 a 60 fps, per TikTok e Short".into(),
++        crate::icons::Icon::Monitor,
++        Act::Cmd("file.newSequence", json!({"name": "Short verticale", "width": 1080, "height": 1920, "fps": 60.0})),
++        false,
++    ));
++    let avail = rect.width() - 72.0;
++    let n = acts.len() as f32;
++    let cw = ((avail - 14.0 * (n - 1.0)) / n).clamp(170.0, 250.0);
++    let per_row = ((avail + 14.0) / (cw + 14.0)).floor().max(1.0) as usize;
++    let ch = 132.0;
++    let top = rect.min.y + 140.0;
++    let mut todo: Option<Act> = None;
++    for (i, (title, sub, icon, act, primary)) in acts.into_iter().enumerate() {
++        let (row, col) = (i / per_row, i % per_row);
++        let r = Rect::from_min_size(pos2(x0 + col as f32 * (cw + 14.0), top + row as f32 * (ch + 14.0)), vec2(cw, ch));
++        let resp = ui.interact(r, egui::Id::new(("jhome", i)), Sense::click());
++        app.auto.add(&format!("home.action.{i}"), r, title);
++        let bg = if primary {
++            if resp.hovered() { t.accent_hover } else { t.accent }
++        } else if resp.hovered() {
++            t.hover
++        } else {
++            t.tl_header_bg
++        };
++        p.rect_filled(r, 12.0, bg);
++        if !primary {
++            p.rect_stroke(r, 12.0, egui::Stroke::new(1.0, Color32::from_white_alpha(14)), egui::StrokeKind::Inside);
++        }
++        let fg = if primary { Color32::WHITE } else { t.text };
++        let dim = if primary { Color32::from_white_alpha(200) } else { t.text_dim };
++        crate::icons::paint(&p, Rect::from_min_size(r.min + vec2(18.0, 18.0), vec2(34.0, 34.0)), icon, if primary { Color32::WHITE } else { Color32::from_rgb(150, 125, 255) });
++        p.text(r.min + vec2(18.0, 86.0), Align2::LEFT_CENTER, title, Tokens::semibold(15.0), fg);
++        let pr = p.with_clip_rect(r.shrink(6.0));
++        pr.text(r.min + vec2(18.0, 108.0), Align2::LEFT_CENTER, sub, Tokens::ui(11.5), dim);
++        if resp.clicked() {
++            todo = Some(act);
++        }
++    }
++    let rows = acts_rows(n as usize, per_row);
++    let mut y = top + rows as f32 * (ch + 14.0) + 22.0;
++
++    // ---- progetti recenti come schede
++    if !recents.is_empty() {
++        p.text(pos2(x0, y), Align2::LEFT_CENTER, "Progetti recenti", Tokens::semibold(16.0), t.text);
++        y += 18.0;
++        let rw = 300.0_f32.min(avail);
++        let per = ((avail + 12.0) / (rw + 12.0)).floor().max(1.0) as usize;
++        for (i, path) in recents.iter().enumerate() {
++            let (row, col) = (i / per, i % per);
++            let r = Rect::from_min_size(pos2(x0 + col as f32 * (rw + 12.0), y + row as f32 * 68.0), vec2(rw, 58.0));
++            let resp = ui.interact(r, egui::Id::new(("jhome-rec", i)), Sense::click()).on_hover_text(path.as_str());
++            app.auto.add(&format!("home.recent.{i}"), r, path);
++            p.rect_filled(r, 10.0, if resp.hovered() { t.hover } else { t.tl_header_bg });
++            p.rect_stroke(r, 10.0, egui::Stroke::new(1.0, Color32::from_white_alpha(14)), egui::StrokeKind::Inside);
++            let pc = p.with_clip_rect(r.shrink(4.0));
++            crate::icons::paint(&pc, Rect::from_center_size(pos2(r.min.x + 24.0, r.center().y), vec2(20.0, 20.0)), crate::icons::Icon::Film, Color32::from_rgb(150, 125, 255));
++            pc.text(pos2(r.min.x + 46.0, r.min.y + 20.0), Align2::LEFT_CENTER, crate::menus::recent_name(path), Tokens::semibold(13.0), t.text);
++            let when = std::fs::metadata(path).and_then(|m| m.modified()).ok().map(ago).unwrap_or_else(|| "file non trovato".into());
++            let folder = std::path::Path::new(path).parent().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
++            pc.text(pos2(r.min.x + 46.0, r.min.y + 40.0), Align2::LEFT_CENTER, format!("{when} · {folder}"), Tokens::ui(11.0), t.text_dim);
++            if resp.clicked() {
++                todo = Some(Act::Open(path.clone()));
++            }
++        }
++        y += recents.len().div_ceil(per) as f32 * 68.0 + 20.0;
++    }
++
++    // ---- strumenti Jarvis
++    p.text(pos2(x0, y), Align2::LEFT_CENTER, "Strumenti Jarvis", Tokens::semibold(16.0), t.text);
++    y += 18.0;
++    let tools: [(&str, &str, usize); 3] = [
++        ("Transizioni Composer", "Le transizioni di Premiere Composer da trascinare", 0),
++        ("Sottotitoli animati", "Pop, oscillazione, posizione a clic", 1),
++        ("Transizioni ed effetti", "Zoom, shake, swoosh e montaggio", 2),
+     ];
+-    let cw = 260.0;
+-    for (i, (title, cmd, sub)) in cards.iter().enumerate() {
+-        let r = Rect::from_min_size(rect.min + vec2(24.0 + i as f32 * (cw + 16.0), 90.0), vec2(cw, 150.0));
+-        let resp = ui.interact(r, egui::Id::unique(("imp", *cmd)), Sense::click());
+-        app.auto.add(&format!("import.{cmd}"), r, title);
+-        ui.painter().rect_filled(r, 8.0, if resp.hovered() { t.hover } else { t.tl_header_bg });
+-        ui.painter().text(r.min + vec2(16.0, 110.0), Align2::LEFT_CENTER, *title, Tokens::semibold(14.0), t.text);
+-        ui.painter().text(r.min + vec2(16.0, 132.0), Align2::LEFT_CENTER, *sub, Tokens::ui(11.5), t.text_dim);
+-        crate::icons::paint(
+-            ui.painter(),
+-            Rect::from_min_size(r.min + vec2(16.0, 18.0), vec2(56.0, 56.0)),
+-            [crate::icons::Icon::Folder, crate::icons::Icon::Film, crate::icons::Icon::Sequence, crate::icons::Icon::Grid][i],
+-            Color32::from_rgb(140, 150, 255),
+-        );
++    let mut x = x0;
++    for (i, (title, tip, tab)) in tools.iter().enumerate() {
++        let g = p.layout_no_wrap(title.to_string(), Tokens::semibold(13.0), t.text);
++        let r = Rect::from_min_size(pos2(x, y), vec2(g.size().x + 32.0, 38.0));
++        let resp = ui.interact(r, egui::Id::new(("jhome-tool", i)), Sense::click()).on_hover_text(*tip);
++        p.rect_filled(r, 19.0, if resp.hovered() { t.hover } else { t.tl_header_bg });
++        p.rect_stroke(r, 19.0, egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(150, 125, 255, 90)), egui::StrokeKind::Inside);
++        p.galley(pos2(r.min.x + 16.0, r.center().y - g.size().y / 2.0), g, t.text);
+         if resp.clicked() {
+-            let _ = crate::menus::invoke(app, &ctx, cmd, json!({}));
++            crate::jarvis_ui::open_tab(app, *tab);
+             app.ui.mode = crate::state::Mode::Edit;
+         }
++        x = r.max.x + 10.0;
+     }
+-    let y = recent(app, ui, rect, 90.0 + 150.0 + 36.0);
+-    // Community and project links.
+-    // ArtCraft wordmark (first-party trademark, docs/brand/), then the section title.
+-    let logo = crate::brand::paint_wordmark(ui, rect.min + vec2(24.0, y), 15.0, app.ui.dark);
+-    let tx = logo.map_or(rect.min.x + 24.0, |r| r.max.x + 12.0);
+-    ui.painter().text(pos2(tx, rect.min.y + y), Align2::LEFT_CENTER, tl!("Community"), Tokens::semibold(15.0), t.text);
+-    let mut x = rect.min.x + 24.0;
+-    for (i, (id, label, url)) in crate::links::ALL.iter().take(4).enumerate() {
+-        let primary = i == 0;
+-        let label = if primary { tl!("Join us on Discord") } else { crate::i18n::t(label) };
+-        let g = ui.painter().layout_no_wrap(label.to_string(), Tokens::ui(13.0), t.text);
+-        let r = Rect::from_min_size(pos2(x, rect.min.y + y + 18.0), vec2(g.size().x + 44.0, 34.0));
+-        let resp = ui.interact(r, egui::Id::unique(("imp-link", *id)), Sense::click()).on_hover_text(*url);
+-        app.auto.add(&format!("import.link.{}", id.trim_start_matches("help.")), r, label);
+-        let (bg, fg) = if primary {
+-            (if resp.hovered() { t.accent_hover } else { t.accent }, Color32::WHITE)
+-        } else {
+-            (if resp.hovered() { t.hover } else { t.tl_header_bg }, t.text)
+-        };
+-        ui.painter().rect_filled(r, 8.0, bg);
+-        let icon = [crate::icons::Icon::Chat, crate::icons::Icon::Globe, crate::icons::Icon::Globe, crate::icons::Icon::Code][i];
+-        crate::icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 20.0, r.center().y), vec2(16.0, 16.0)), icon, fg);
+-        ui.painter().galley(pos2(r.min.x + 34.0, r.center().y - g.size().y / 2.0), g, fg);
+-        if resp.clicked() {
+-            crate::links::open(app, &ctx, url);
++    y += 60.0;
++    p.text(
++        pos2(x0, y.min(rect.max.y - 20.0)),
++        Align2::LEFT_CENTER,
++        "Suggerimento: da Jarvis Clipper premi \"Esporta in FilmCraft\" e il montaggio si apre qui da solo, in una cartella.",
++        Tokens::ui(12.0),
++        t.text_dim,
++    );
++
++    match todo {
++        Some(Act::Cmd(cmd, params)) => {
++            if crate::menus::invoke(app, &ctx, cmd, params).is_ok() || cmd != "file.open" {
++                app.ui.mode = crate::state::Mode::Edit;
++            }
++        }
++        Some(Act::Open(path)) => open_recent(app, ui, path),
++        None => {}
++    }
++}
++
++fn acts_rows(n: usize, per_row: usize) -> usize {
++    n.div_ceil(per_row.max(1))
++}
++
++fn ago(t: std::time::SystemTime) -> String {
++    let s = std::time::SystemTime::now().duration_since(t).map(|d| d.as_secs()).unwrap_or(0);
++    match s {
++        0..=59 => "adesso".into(),
++        60..=3599 => format!("{} min fa", s / 60),
++        3600..=86_399 => format!("{} ore fa", s / 3600),
++        86_400..=172_799 => "ieri".into(),
++        _ => format!("{} giorni fa", s / 86_400),
++    }
++}
++
++fn open_recent(app: &mut FilmcraftApp, ui: &mut egui::Ui, path: String) {
++    let ctx = ui.ctx().clone();
++    if crate::panels::clip_dialogs::ask_before_open(app, &path).is_some() {
++        if let Some(info) = app.ui.clip_dialog.as_mut().and_then(|d| d.info.as_object_mut()) {
++            info.insert("editAfterOpen".into(), json!(true));
+         }
+-        x = r.max.x + 12.0;
++    } else if crate::menus::invoke(app, &ctx, "file.open", json!({"path": path})).is_ok() {
++        app.ui.mode = crate::state::Mode::Edit;
+     }
+ }
+ 
++#[allow(dead_code)]
+ /// Recent projects listed on Home, as in File ▸ Open Recent.
+ const RECENT_ROWS: usize = 6;
+ const RECENT_ROW_H: f32 = 28.0;
 diff --git a/crates/ui-egui/src/panels/timeline.rs b/crates/ui-egui/src/panels/timeline.rs
 index 13b90a6..95ef78b 100644
 --- a/crates/ui-egui/src/panels/timeline.rs

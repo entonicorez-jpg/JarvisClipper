@@ -266,7 +266,10 @@ def transcribe_range(path, rs, length, opts, progress, log, stop):
             raise RuntimeError("Annullato")
         d = min(step, length - t)
         progress(t / length, f"Ascolto cosa dici… {media.tc(t)} / {media.tc(length)}")
-        segs += tr.transcribe(path, rs + t, d, 1)
+        part = tr.transcribe(path, rs + t, d, 5 if getattr(tr, "gpu", False) else 1)
+        segs += part
+        from . import sidecar
+        sidecar.save(path, part, rs + t, rs + t + d)
         t += d
     return segs
 

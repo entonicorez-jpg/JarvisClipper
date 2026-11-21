@@ -31,6 +31,17 @@ def filter_graph(info, layout, W=OUT_W, H=OUT_H):
     if cam_h == 0:
         return f"[0:v]{gf},format=yuv420p[v]"
     c = clamp_rect(layout["cam"], info)
+    if layout.get("mode") == "bg":
+        # cam ritagliata come vuoi tu, dentro il riquadro sopra; dietro il gioco ingrandito e sfumato
+        m = float(layout.get("margin", 0.05))
+        bw, bh = even(W * (1 - 2 * m)), even(cam_h * (1 - 2 * m))
+        b = clamp_rect(layout.get("bg") or layout["game"], info)
+        blur = max(4, int(W / 40))
+        bgf = (f"crop={b['w']}:{b['h']}:{b['x']}:{b['y']},scale={W}:{cam_h}:force_original_aspect_ratio=increase,"
+               f"crop={W}:{cam_h},boxblur={blur}:2,eq=brightness=-0.06:saturation=1.1,setsar=1")
+        cf = f"crop={c['w']}:{c['h']}:{c['x']}:{c['y']},scale={bw}:{bh}:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1"
+        return (f"[0:v]split=3[a][b][s];[s]{bgf}[bg];[a]{cf}[c];[bg][c]overlay=(W-w)/2:(H-h)/2[top];"
+                f"[b]{gf}[g];[top][g]vstack=inputs=2,format=yuv420p[v]")
     cf = f"crop={c['w']}:{c['h']}:{c['x']}:{c['y']},scale={W}:{cam_h}:flags=lanczos,setsar=1"
     return f"[0:v]split=2[a][b];[a]{cf}[c];[b]{gf}[g];[c][g]vstack=inputs=2,format=yuv420p[v]"
 
