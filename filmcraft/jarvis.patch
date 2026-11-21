@@ -184,10 +184,10 @@ index 44399e4..3660b2f 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..ee6a46c
+index 0000000..6ff2324
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,1395 @@
+@@ -0,0 +1,1488 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -1187,25 +1187,100 @@ index 0000000..ee6a46c
 +    pub installed: Option<std::sync::Arc<dyn filmcraft_speech::Transcriber>>,
 +}
 +
++/// I pezzi di media (tempo del file) che suonano in `seq`, entrando nelle sequenze annidate.
++/// `window` = la parte della sequenza che si sente (None = tutta). Salta SFX e audio cortissimi
++/// (bip della censura, swoosh): Whisper su un bip si inventa "Sottotitoli a cura di…".
++fn collect_audio(pr: &filmcraft_project::Project, seq: &filmcraft_project::Sequence, window: Option<(Tick, Tick)>, per: &mut std::collections::BTreeMap<u64, Vec<(Tick, Tick)>>, depth: usize) {
++    if depth > 8 {
++        return;
++    }
++    let pad = Tick::from_seconds_f64(0.5);
++    for tr in &seq.audio_tracks {
++        if tr.name.starts_with(SFX_TRACK) || tr.muted {
++            continue;
++        }
++        for it in tr.items.iter().filter(|i| i.enabled && i.speed > 0.0) {
++            let (mut a, mut b) = (it.start, it.end());
++            if let Some((wa, wb)) = window {
++                a = a.max(wa);
++                b = b.min(wb);
++            }
++            if b <= a {
++                continue;
++            }
++            let m = |t: Tick| it.source_in + Tick(((t - it.start).0 as f64 * it.speed).round() as i64);
++            let (ma, mb) = (m(a), m(b));
++            match pr.item(it.item).map(|x| &x.kind) {
++                Some(filmcraft_project::ItemKind::Sequence(inner)) => collect_audio(pr, inner, Some((ma, mb)), per, depth + 1),
++                _ => {
++                    let Some((root, media, _)) = pr.resolve_media(it.item) else { continue };
++                    let nm = pr.item(root).map(|x| x.name.to_lowercase()).unwrap_or_default();
++                    if media.duration() < Tick::from_seconds_f64(6.0) || ["censura", "swoosh", "whoosh", "sfx", "bip"].iter().any(|k| nm.contains(k)) {
++                        continue;
++                    }
++                    per.entry(root.0).or_default().push((Tick((ma.0 - pad.0).max(0)), mb + pad));
++                }
++            }
++        }
++    }
++}
++
++/// Le sequenze annidate usate come audio (prima le più interne).
++fn find_nests(pr: &filmcraft_project::Project, seq: &filmcraft_project::Sequence, out: &mut Vec<(filmcraft_project::ItemId, std::sync::Arc<filmcraft_project::Sequence>)>, depth: usize) {
++    if depth > 8 {
++        return;
++    }
++    for tr in &seq.audio_tracks {
++        for it in &tr.items {
++            if let Some(filmcraft_project::ItemKind::Sequence(inner)) = pr.item(it.item).map(|x| &x.kind) {
++                if out.iter().any(|(i, _)| *i == it.item) {
++                    continue;
++                }
++                find_nests(pr, inner, out, depth + 1);
++                out.push((it.item, inner.clone()));
++            }
++        }
++    }
++}
++
++/// Frasi che Whisper si inventa sul silenzio o sui suoni.
++fn hallucination(text: &str) -> bool {
++    let t = text.to_lowercase();
++    ["sottotitoli a cura", "sottotitoli creati", "amara.org", "qtss", "sottotitoli e revisione", "grazie per la visione", "iscriviti al canale"].iter().any(|k| t.contains(k))
++}
++
++/// Pezzi di testo uniti, per togliere le frasi inventate parola per parola.
++fn drop_hallucinations(words: &mut Vec<filmcraft_project::Word>) {
++    let n = words.len();
++    let mut kill = vec![false; n];
++    for i in 0..n {
++        let mut acc = String::new();
++        for j in i..(i + 8).min(n) {
++            acc.push(' ');
++            acc.push_str(&words[j].text);
++            if hallucination(&acc) {
++                for k in i..=j {
++                    kill[k] = true;
++                }
++                break;
++            }
++        }
++    }
++    let mut i = 0;
++    words.retain(|_| {
++        i += 1;
++        !kill[i - 1]
++    });
++}
++
 +/// Prepara la trascrizione: solo i pezzi di audio usati nella sequenza. None = c'è già.
 +pub fn prepare_captions(s: &Session, p: &Value) -> Result<Option<CaptionJob>> {
 +    if !crate::transcript::sequence_words(s).is_empty() && !bool_p(p, "retranscribe").unwrap_or(false) {
 +        return Ok(None);
 +    }
 +    let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
-+    let pad = Tick::from_seconds_f64(0.5);
 +    let mut per: std::collections::BTreeMap<u64, Vec<(Tick, Tick)>> = Default::default();
-+    for tr in &q.audio_tracks {
-+        if tr.name.starts_with(SFX_TRACK) || tr.muted {
-+            continue;
-+        }
-+        for it in tr.items.iter().filter(|i| i.enabled) {
-+            let Some((root, _, _)) = s.project.resolve_media(it.item) else { continue };
-+            let len = Tick((it.duration.0 as f64 * it.speed.abs()).round() as i64);
-+            let a = Tick((it.source_in.0 - pad.0).max(0));
-+            per.entry(root.0).or_default().push((a, it.source_in + len + pad));
-+        }
-+    }
++    collect_audio(&s.project, q, None, &mut per, 0);
 +    let mut items = Vec::new();
 +    for (id, mut rs) in per {
 +        let item = filmcraft_project::ItemId(id);
@@ -1294,6 +1369,7 @@ index 0000000..ee6a46c
 +                c = e;
 +            }
 +        }
++        drop_hallucinations(&mut words);
 +        let mut tr = filmcraft_project::Transcript { language: lang, source: t.id(), speakers: Vec::new(), words };
 +        tr.normalize();
 +        out.push((item, tr));
@@ -1303,9 +1379,26 @@ index 0000000..ee6a46c
 +
 +/// Salva le trascrizioni fatte in background (una modifica annullabile).
 +pub fn apply_transcripts(s: &mut Session, done: Vec<(filmcraft_project::ItemId, filmcraft_project::Transcript)>) -> Result<()> {
++    let seq_id = s.state.active_sequence;
 +    s.edit("Trascrizione Jarvis", move |pr, _| {
 +        for (i, t) in done {
 +            pr.transcripts.insert(i, std::sync::Arc::new(t));
++        }
++        // le sequenze annidate: la loro trascrizione è quella di quello che c'è dentro
++        let mut nests = Vec::new();
++        if let Some(q) = seq_id.and_then(|id| pr.sequence(id)) {
++            find_nests(pr, q, &mut nests, 0);
++        }
++        for (id, inner) in nests {
++            let words: Vec<filmcraft_project::Word> = filmcraft_edit::transcript::sequence_words(&inner, &pr.transcripts)
++                .into_iter()
++                .map(|w| filmcraft_project::Word::new(w.text, w.start, w.end))
++                .collect();
++            if !words.is_empty() {
++                let mut tr = filmcraft_project::Transcript { language: "it".into(), source: "jarvis-nest".into(), speakers: Vec::new(), words };
++                tr.normalize();
++                pr.transcripts.insert(id, std::sync::Arc::new(tr));
++            }
 +        }
 +        Ok(())
 +    })
