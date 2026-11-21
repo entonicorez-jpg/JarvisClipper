@@ -479,17 +479,51 @@ def job_edit_ai(pid, prompt, use_video):
             if all(abs(t - q) >= 2.0 for q, _ in peaks):
                 peaks.append((t, float(zz[i])))
         peaks.sort()
-    video = None
-    if use_video:
-        set_job(pid, progress=0.5, msg="Preparo una versione piccola del video per Gemini…")
-        prox = os.path.join(pdir(pid), "gemini_proxy.mp4")
-        media.run(["-y", "-hide_banner", "-loglevel", "error", "-ss", f"{rs:.2f}", "-t", f"{re_ - rs:.2f}", "-i", p["src_path"],
-                   "-vf", "scale=-2:360,fps=4", "-c:v", "libx264", "-preset", "veryfast", "-crf", "32",
-                   "-ac", "1", "-c:a", "aac", "-b:a", "48k", prox])
-        set_job(pid, progress=0.6, msg="Mando il video a Gemini…")
-        video = ai_edit.upload_video(prox, key, lambda m: set_job(pid, log=m))
-    set_job(pid, progress=0.75, msg="Gemini sta montando il video come gli hai detto…")
-    res, model = ai_edit.plan(key, c.get("gemini_model") or "", prompt, rs, re_, words, peaks, ed, video, lambda m: set_job(pid, log=m))
+    # video lunghi: a parti da ~15 minuti (tagliate in una pausa), ognuna montata con le stesse istruzioni
+    parts = [(rs, re_)]
+    if re_ - rs > 25 * 60:
+        step, t, parts = 15 * 60.0, rs, []
+        keep_now = ed.get("keep", [])
+        while re_ - t > step * 1.3:
+            want = t + step
+            gaps = [(keep_now[i][1] + keep_now[i + 1][0]) / 2 for i in range(len(keep_now) - 1)
+                    if want - 90 <= keep_now[i][1] <= want + 90 and keep_now[i + 1][0] - keep_now[i][1] > 0.4]
+            cut = min(gaps, key=lambda g: abs(g - want)) if gaps else want
+            parts.append((t, cut)); t = cut
+        parts.append((t, re_))
+        set_job(pid, log=f"Video lungo: lo faccio montare in {len(parts)} parti")
+    all_res = {"keep": [], "zooms": [], "censor": None, "note": []}
+    model = ""
+    for k, (a, b) in enumerate(parts):
+        if stopped(pid):
+            raise RuntimeError("Annullato")
+        tag = f" (parte {k + 1} di {len(parts)})" if len(parts) > 1 else ""
+        sub = dict(ed)
+        sub["keep"] = [[max(x, a), min(y, b)] for x, y in ed.get("keep", []) if y > a and x < b]
+        sub["zooms"] = [z for z in ed.get("zooms", []) if a <= z["s"] < b]
+        sub["censor"] = [c_ for c_ in ed.get("censor", []) if a <= c_["s"] < b]
+        video = None
+        if use_video:
+            set_job(pid, progress=0.5 + 0.45 * k / len(parts), msg=f"Preparo il video per Gemini{tag}…")
+            prox = os.path.join(pdir(pid), f"gemini_proxy_{k}.mp4")
+            media.run(["-y", "-hide_banner", "-loglevel", "error", "-ss", f"{a:.2f}", "-t", f"{b - a:.2f}", "-i", p["src_path"],
+                       "-vf", "scale=-2:360,fps=4", "-c:v", "libx264", "-preset", "veryfast", "-crf", "32",
+                       "-ac", "1", "-c:a", "aac", "-b:a", "48k", prox])
+            video = ai_edit.upload_video(prox, key, lambda m: set_job(pid, log=m))
+        set_job(pid, progress=0.5 + 0.45 * (k + 0.5) / len(parts), msg=f"Gemini sta montando come gli hai detto{tag}…")
+        pw = [w for w in words if a <= w["s"] < b]
+        pp = [q for q in peaks if a <= q[0] < b]
+        instr = prompt if len(parts) == 1 else (prompt + f"\n\n(Questa è la parte {k + 1} di {len(parts)} di un video lungo: "
+                                                       "monta solo questo pezzo, con lo stesso stile delle altre parti.)")
+        res, model = ai_edit.plan(key, c.get("gemini_model") or "", instr, a, b, pw, pp, sub, video, lambda m: set_job(pid, log=m))
+        kk, zz_, cc, nn = ai_edit.clean(res, a, b)
+        all_res["keep"] += kk; all_res["zooms"] += zz_
+        if cc is not None:
+            all_res["censor"] = (all_res["censor"] or []) + [[x["s"], x["e"]] for x in cc]
+        if nn:
+            all_res["note"].append(nn)
+    res = {"keep": all_res["keep"], "zooms": all_res["zooms"], "censor": all_res["censor"],
+           "note": " ".join(all_res["note"]) if len(parts) == 1 else f"Montato in {len(parts)} parti. " + (all_res["note"][0] if all_res["note"] else "")}
     keep, zooms, censor, note = ai_edit.clean(res, rs, re_)
     if not keep:
         raise RuntimeError("Gemini non ha lasciato nessun pezzo: prova a spiegarlo in un altro modo")
