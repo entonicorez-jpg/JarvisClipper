@@ -8,7 +8,38 @@ import urllib.error
 import urllib.request
 
 API = "https://generativelanguage.googleapis.com"
-MODELS = ["gemini-3-flash-preview", "gemini-2.5-flash"]
+MODELS = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview"]
+_BEST = {}
+
+
+def best_models(key):
+    """I modelli Flash che la tua chiave può usare, dal più nuovo (chiesti a Google, così non invecchia)."""
+    if key in _BEST:
+        return _BEST[key]
+    import re
+    found = []
+    try:
+        tok = ""
+        for _ in range(5):
+            raw, _ = _req(f"{API}/v1beta/models?pageSize=200" + (f"&pageToken={tok}" if tok else ""), key, timeout=30)
+            d = json.loads(raw)
+            for m in d.get("models", []):
+                n = m.get("name", "").split("/")[-1]
+                if "generateContent" not in m.get("supportedGenerationMethods", []):
+                    continue
+                if not re.fullmatch(r"gemini-\d+(\.\d+)?-flash(-preview)?(-\d\d-\d{4})?", n):
+                    continue
+                v = re.match(r"gemini-(\d+(?:\.\d+)?)", n).group(1)
+                found.append((float(v), "preview" not in n, n))
+            tok = d.get("nextPageToken", "")
+            if not tok:
+                break
+    except Exception:
+        pass
+    found.sort(reverse=True)
+    names = [n for _, _, n in found] or MODELS
+    _BEST[key] = names
+    return names
 
 SYSTEM = """Sei l'editor video di MrJake, streamer italiano (Kick/TikTok). Ricevi la trascrizione di un pezzo di live
 con i tempi di ogni parola (secondi assoluti del file), i picchi di voce (dove alza la voce/urla/ride), il montaggio
@@ -114,7 +145,8 @@ def plan(key, model, instructions, rs, re_, words, peaks, ed, video=None, log=pr
             "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {"responseMimeType": "application/json", "responseSchema": SCHEMA, "temperature": 0.3}}
     last = None
-    for m in ([model] if model else []) + [x for x in MODELS if x != model]:
+    cands = ([model] if model else []) + [x for x in best_models(key) if x != model]
+    for m in cands[:6]:
         try:
             raw, _ = _req(f"{API}/v1beta/models/{m}:generateContent", key, json.dumps(body).encode(),
                           {"Content-Type": "application/json"}, "POST", timeout=600)
@@ -123,7 +155,8 @@ def plan(key, model, instructions, rs, re_, words, peaks, ed, video=None, log=pr
             return json.loads(txt), m
         except RuntimeError as e:
             last = e
-            if "not found" in str(e).lower() or "not supported" in str(e).lower():
+            low = str(e).lower()
+            if any(k in low for k in ("not found", "not supported", "no longer available", "deprecated", "is not available", "not available to new")):
                 log(f"Modello {m} non disponibile, provo il prossimo")
                 continue
             raise
