@@ -18,7 +18,8 @@ USER_DIR = os.path.join(os.path.expanduser("~"), "Videos", "JarvisClipper")
 os.makedirs(PROJ_DIR, exist_ok=True)
 os.makedirs(USER_DIR, exist_ok=True)
 
-DEFAULT_CFG = {"api_key": "", "ai_model": "claude-sonnet-5-5", "model": "small", "max_clips": 15,
+DEFAULT_CFG = {"api_key": "", "ai_model": "claude-sonnet-5-5", "gemini_key": "", "gemini_model": "", "ai_video": False,
+               "ai_prompts": [], "model": "small", "max_clips": 15,
                "split": 0.4, "min_len": 15, "max_len": 59, "pre": 14, "post": 8, "lang": "it"}
 
 app = Flask(__name__, static_folder=os.path.join(BASE, "static"))
@@ -435,6 +436,145 @@ def job_edit_export(pid, premiere_xml, mp4, kden=False, fcraft=False):
             pass
 
 
+# ------------------------------------------------------------------ montaggio a parole (Gemini)
+def range_words(p, rs, re_, opts, progress, log, stop):
+    """Le parole di [rs, re_]: dalla trascrizione salvata accanto al video, se no la fa adesso."""
+    from core import sidecar
+    fp = sidecar.path_for(p["src_path"])
+    if os.path.exists(fp):
+        try:
+            d = json.load(open(fp, encoding="utf-8"))
+            if any(a <= rs + 1 and b >= re_ - 1 for a, b in d.get("ranges", [])):
+                return [w for w in d.get("words", []) if rs <= w["s"] < re_]
+        except Exception:
+            pass
+    segs = autoedit.transcribe_range(p["src_path"], rs, re_ - rs, opts, progress, log, stop)
+    return [w for sg in segs for w in sg["words"] if rs <= w["s"] < re_]
+
+
+def job_edit_ai(pid, prompt, use_video):
+    from core import ai_edit
+    import numpy as np
+    c = cfg()
+    key = (c.get("gemini_key") or "").strip()
+    if not key:
+        raise RuntimeError("Metti la chiave di Google Gemini in Impostazioni (⚙)")
+    p = load(pid); ed = p.get("edit")
+    if not ed:
+        raise RuntimeError("Prima fai partire il montaggio automatico, poi dimmi come lo vuoi")
+    rs, re_ = ed.get("range") or p.get("range") or [0, p["info"]["dur"]]
+    opts = dict(ed.get("opts") or {}); opts.setdefault("model", c.get("model", "small")); opts.setdefault("lang", "it")
+    set_job(pid, progress=0.05, msg="Leggo cosa dici nel video…")
+    words = range_words(p, rs, re_, opts, lambda f, m: set_job(pid, progress=0.05 + 0.4 * f, msg=m),
+                        lambda m: set_job(pid, log=m), lambda: stopped(pid))
+    peaks = []
+    half = load_half(pid)
+    if half is not None and len(half) >= int(re_ * 2) - 2:
+        zz = autoedit.voice_z(half[int(rs * 2):int(re_ * 2)], ed.get("keep", []), rs)
+        last = -9.0
+        for i in np.argsort(-zz)[:400]:
+            t = rs + i * 0.5
+            if zz[i] < 4 or len(peaks) >= 80:
+                break
+            if all(abs(t - q) >= 2.0 for q, _ in peaks):
+                peaks.append((t, float(zz[i])))
+        peaks.sort()
+    video = None
+    if use_video:
+        set_job(pid, progress=0.5, msg="Preparo una versione piccola del video per Gemini…")
+        prox = os.path.join(pdir(pid), "gemini_proxy.mp4")
+        media.run(["-y", "-hide_banner", "-loglevel", "error", "-ss", f"{rs:.2f}", "-t", f"{re_ - rs:.2f}", "-i", p["src_path"],
+                   "-vf", "scale=-2:360,fps=4", "-c:v", "libx264", "-preset", "veryfast", "-crf", "32",
+                   "-ac", "1", "-c:a", "aac", "-b:a", "48k", prox])
+        set_job(pid, progress=0.6, msg="Mando il video a Gemini…")
+        video = ai_edit.upload_video(prox, key, lambda m: set_job(pid, log=m))
+    set_job(pid, progress=0.75, msg="Gemini sta montando il video come gli hai detto…")
+    res, model = ai_edit.plan(key, c.get("gemini_model") or "", prompt, rs, re_, words, peaks, ed, video, lambda m: set_job(pid, log=m))
+    keep, zooms, censor, note = ai_edit.clean(res, rs, re_)
+    if not keep:
+        raise RuntimeError("Gemini non ha lasciato nessun pezzo: prova a spiegarlo in un altro modo")
+    with LOCK:
+        p = load(pid); ed = p.get("edit") or {}
+        ed.update(keep=keep, zooms=zooms if p.get("edit_cam") else [], ai_note=note, ai_prompt=prompt)
+        if censor is not None:
+            ed["censor"] = censor
+        ed["report"] = autoedit.report(ed)
+        p["edit"] = ed; save(p)
+    set_job(pid, log=f"Gemini ({model}): {note}", msg="✨ " + (note or "Montaggio fatto da Gemini"))
+
+
+VOICE = {"proc": None, "path": None}
+_WHISPER = {}
+
+
+def voice_to_text(path, lang="it"):
+    """Trascrive il messaggio vocale (le istruzioni) con Whisper sul PC."""
+    from core import analyze
+    tr = _WHISPER.get("t")
+    if tr is None:
+        tr = analyze.Transcriber(cfg().get("model", "small"), lang, print)
+        tr.load()
+        _WHISPER["t"] = tr
+    wav = os.path.join(DATA_DIR, "voce_16k.wav")
+    media.run(["-y", "-hide_banner", "-loglevel", "error", "-i", path, "-ac", "1", "-ar", "16000", wav])
+    dur = os.path.getsize(wav) / 32000.0 if os.path.exists(wav) else 60.0
+    segs = tr.transcribe(wav, 0.0, max(1.0, dur + 1), 5 if getattr(tr, "gpu", False) else 1)
+    return " ".join(s["text"] for s in segs).strip()
+
+
+@app.route("/api/project/<pid>/edit/ai", methods=["POST"])
+def api_edit_ai(pid):
+    d = request.json or {}
+    prompt = str(d.get("prompt", "")).strip()
+    if not prompt:
+        return jsonify({"error": "Dimmi come vuoi il video"}), 400
+    vid = bool(d.get("video", False))
+    c = cfg(); c["ai_video"] = vid
+    json.dump(c, open(CFG_PATH, "w", encoding="utf-8"), indent=1)
+    return jsonify({"ok": start_job(pid, "edit_ai", lambda: job_edit_ai(pid, prompt, vid))})
+
+
+@app.route("/api/voice", methods=["POST"])
+def api_voice():
+    """Audio registrato nella finestra (webm/ogg) -> testo."""
+    f = os.path.join(DATA_DIR, "voce.webm")
+    with open(f, "wb") as fh:
+        fh.write(request.get_data())
+    try:
+        return jsonify({"text": voice_to_text(f)})
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+@app.route("/api/voice/rec", methods=["POST"])
+def api_voice_rec():
+    """Ripiego se la finestra non può usare il microfono: registra con ffmpeg (Windows, dshow)."""
+    d = request.json or {}
+    if d.get("start"):
+        r = media.run(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"])
+        devs = re.findall(r'"([^"]+)"\s*\(audio\)', r.stderr)
+        if not devs:
+            return jsonify({"error": "Non trovo il microfono"}), 500
+        out = os.path.join(DATA_DIR, "voce.wav")
+        VOICE["path"] = out
+        VOICE["proc"] = media.subprocess.Popen([media.ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-f", "dshow",
+                                                "-i", f"audio={devs[0]}", "-ac", "1", "-ar", "16000", out],
+                                               stdin=media.subprocess.PIPE, creationflags=media.CREATE_NO_WINDOW)
+        return jsonify({"ok": True, "device": devs[0]})
+    pr = VOICE.get("proc")
+    if not pr:
+        return jsonify({"error": "Non sto registrando"}), 400
+    try:
+        pr.communicate(b"q", timeout=5)
+    except Exception:
+        pr.kill()
+    VOICE["proc"] = None
+    try:
+        return jsonify({"text": voice_to_text(VOICE["path"])})
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
 # ------------------------------------------------------------------ API
 @app.route("/api/project/<pid>/range", methods=["POST"])
 def api_range(pid):
@@ -542,6 +682,7 @@ def api_config():
         c = cfg(); c.update({k: v for k, v in request.json.items() if k in DEFAULT_CFG})
         json.dump(c, open(CFG_PATH, "w", encoding="utf-8"), indent=1)
     c = cfg(); c["api_key_set"] = bool(c.get("api_key")); c["api_key"] = ""
+    c["gemini_key_set"] = bool(c.get("gemini_key")); c["gemini_key"] = ""
     return jsonify(c)
 
 

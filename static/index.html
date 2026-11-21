@@ -146,6 +146,13 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
 .zoombar{display:flex;align-items:center;gap:8px;margin-top:8px;color:var(--mut);font-size:12px;white-space:nowrap}.zoombar .hint{white-space:normal}
 .zoombar input[type=range]{flex:0 0 160px}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+.ai textarea{width:100%;background:var(--bg);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:8px;font:inherit;font-size:13px;resize:vertical}
+.airow{display:flex;gap:8px;align-items:flex-start}
+.mic{font-size:20px;width:46px;height:46px;border-radius:50%;padding:0;flex:none}
+.mic.rec{background:#ff3d5a;border-color:#ff3d5a;animation:pulse 1s infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 8px #ff3d5a33}}
+.aichips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.aichips button{font-size:12px;padding:4px 10px;border-radius:14px}
 .panel h4{margin:0 0 10px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--mut)}
 .stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .stat{background:#0e1115;border:1px solid var(--line);border-radius:10px;padding:8px 10px}
@@ -343,6 +350,15 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
           <div class="zoombar">🔎 Zoom timeline <input type="range" id="eZoomTl" min="0" max="100" value="0"> <span class="hint">Rotellina = zoom · Shift+rotellina = scorri · trascina gli zoom per spostarli, i bordi per allungarli · clic sulla corsia ZOOM = scegli la clip, doppio clic = zoom su quella clip</span></div>
         </div>
         <div>
+          <div class="panel ai"><h4>✨ Dimmi come lo vuoi</h4>
+            <div class="airow"><textarea id="aiPrompt" rows="4" placeholder="Es. taglia le parti dove leggo la chat e i saluti, tieni solo la storia del boss, zoom forte quando urlo o muoio, niente zoom quando parlo normale"></textarea>
+              <button id="micBtn" class="mic" onclick="micToggle()" title="Parla e scrivo io">🎤</button></div>
+            <div class="hint" id="micMsg">Premi 🎤 e parla liberamente: quando ripremi scrivo io quello che hai detto (puoi correggerlo).</div>
+            <div id="aiChips" class="aichips"></div>
+            <label class="tog"><input type="checkbox" id="aiVideo"> Fai guardare anche il video (più preciso sulle reazioni, più lento)</label>
+            <button class="pri big2" id="aiGo" onclick="aiGo()">✨ Monta come ho detto</button>
+            <div class="hint" id="aiNote"></div>
+          </div>
           <div class="panel"><h4>Risultato</h4><div class="stats" id="eStats"></div></div>
           <div class="panel insp" id="eInsp"><h4>Selezione</h4><div class="hint">Clicca un pezzo o uno zoom nella timeline.</div></div>
           <div class="panel"><h4>Stile zoom</h4>
@@ -384,6 +400,11 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
   <div style="color:var(--mut);font-size:13px">Facoltativo: con una chiave API di Claude le clip vengono rivalutate anche da un'AI che legge cosa dici (titolo e testo hook inclusi). Senza chiave funziona tutto lo stesso, in locale.</div>
   <label>Chiave API Anthropic <input type="password" id="cKey" placeholder="sk-ant-… (lascia vuoto per non cambiarla)"></label>
   <label>Modello AI <input type="text" id="cModel"></label>
+  <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
+    <b>✨ Google Gemini (montaggio a parole)</b>
+    <div style="color:var(--mut);font-size:13px;margin:4px 0">Nell'editor dici o scrivi come vuoi il video e Gemini fa tagli e zoom. La chiave è gratis su <b>aistudio.google.com</b> → "Get API key".</div>
+    <label>Chiave API Gemini <input type="password" id="cGem" placeholder="AIza… (lascia vuoto per non cambiarla)"></label>
+  </div>
   <label>Secondi prima del picco <input type="number" id="cPre"></label>
   <label>Secondi dopo il picco <input type="number" id="cPost"></label>
   <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:14px">
@@ -493,6 +514,7 @@ async function refresh(){
   }
   if(VIEW==='vEditSetup'){$('#eGo').disabled=!!j.running;$('#backEditorBtn').classList.toggle('hidden',!p.edit)}
   if(VIEW==='vRange'&&p.strip&&R&&!R.stripImg)rangeInit(true);
+  if(justDone&&j.name==='edit_ai'&&VIEW==='vEditor'){edLoad()}
   if(justDone&&j.name==='edit_preview'&&p.edit_preview){const v=$('#prevV');v.src=`/p/${PID}/${p.edit_preview}`;$('#prevModal').classList.add('on')}
   if(justDone&&j.name==='edit_export'&&p.last_edit_export){const e=p.last_edit_export,d=$('#done');d.style.display='block';
     d.innerHTML=`✅ <b>Esportato.</b> ${e.xml?`In Premiere: <b>File › Importa</b> e scegli <code>${esc(e.xml.split(/[\\/]/).pop())}</code> · V1 = video tagliato (collegato all'audio), V2 = zoom come livello sopra (spostali e allungali), V3 = motion blur, A1 = audio unico, A2 = censura. `:''}${e.filmcraft&&e.filmcraft_opened?`FilmCraft Jarvis si sta aprendo con il montaggio già dentro. `:''}${e.filmcraft&&!e.filmcraft_opened?`FilmCraft: <b>File › Importa</b> (Ctrl+I) e scegli <code>${esc(e.filmcraft.split(/[\\/]/).pop())}</code> · V1 = video tagliato (collegato all'audio), V2 = zoom come livello sopra (spostali e allungali), V3 = motion blur, A1 = audio unico, A2 = censura. `:''}${e.kdenlive?`Kdenlive: fai <b>doppio clic</b> su <code>${esc(e.kdenlive.split(/[\\/]/).pop())}</code> (o File › Apri) · V1 = tagli e zoom (effetto Trasforma), V2 = zoom con motion blur, A2 = suoni di censura. `:''}${e.mp4?`Video pronto: <code>${esc(e.mp4.split(/[\\/]/).pop())}</code>. `:''}<button class="sm" onclick="openFolder()">Apri cartella</button>`;window.scrollTo({top:0,behavior:'smooth'})}
@@ -718,6 +740,7 @@ async function openFolder(){await api(`/api/project/${PID}/open`,{})}
 
 /* ---------- impostazioni ---------- */
 async function openCfg(){const c=await api('/api/config');window.CFG=c;$('#cKey').value='';$('#cKey').placeholder=c.api_key_set?'chiave salvata ✓ (scrivi per sostituirla)':'sk-ant-…';
+  $('#cGem').value='';$('#cGem').placeholder=c.gemini_key_set?'chiave salvata ✓ (scrivi per sostituirla)':'AIza… (gratis su aistudio.google.com)';
   $('#cModel').value=c.ai_model;$('#cPre').value=c.pre;$('#cPost').value=c.post;$('#cfg').classList.add('on');gpuRefresh()}
 function closeCfg(){$('#cfg').classList.remove('on');clearInterval(window.gpuT)}
 async function gpuRefresh(){const g=await api('/api/gpu');
@@ -725,7 +748,7 @@ async function gpuRefresh(){const g=await api('/api/gpu');
   $('#gpuBtn').disabled=g.running||g.installed;$('#gpuBtn').style.display=(g.nvidia||g.installed||g.running)?'':'none';
   $('#gpuBar').style.width=(g.progress*100)+'%';return g}
 async function gpuInstall(){await api('/api/gpu',{});clearInterval(window.gpuT);window.gpuT=setInterval(async()=>{const g=await gpuRefresh();if(!g.running)clearInterval(window.gpuT)},1000)}
-async function saveCfg(){const b={ai_model:$('#cModel').value,pre:+$('#cPre').value,post:+$('#cPost').value};if($('#cKey').value)b.api_key=$('#cKey').value.trim();await api('/api/config',b);closeCfg()}
+async function saveCfg(){const b={ai_model:$('#cModel').value,pre:+$('#cPre').value,post:+$('#cPost').value};if($('#cKey').value)b.api_key=$('#cKey').value.trim();if($('#cGem').value)b.gemini_key=$('#cGem').value.trim();await api('/api/config',b);closeCfg();aiStatus()}
 async function clearKey(){await api('/api/config',{api_key:''});closeCfg()}
 
 
@@ -769,6 +792,42 @@ async function startEdit(){await camSave();
     full_cam:$('#eFull').checked,blur:$('#eBlur').checked,out:$('#eOutBlur').checked?'blur':'netto'});
   if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else{ED=null;$('#jobbar').classList.remove('hidden')}}
 
+/* ---------- montaggio a parole (Gemini) ---------- */
+const AI_PRESETS=[
+  ['Short TikTok','Short da TikTok: ritmo veloce, taglia tutte le pause e i tempi morti, togli saluti, lettura della chat e richieste di like, tieni solo il momento forte con un minimo di contesto. Zoom forti sulle reazioni vere, qualche zoom a stacco mentre racconto.'],
+  ['Solo reazioni','Tieni solo le mie reazioni forti (urla, risate, spaventi) con 2-3 secondi prima per capire cosa succede. Zoom forte su ogni reazione.'],
+  ['Video lungo','Video per YouTube: taglia solo le pause lunghe e le parti dove non succede niente, lascia respirare la storia. Pochi zoom, solo sui momenti più forti.'],
+  ['Zero zoom','Non mettere nessuno zoom, sistema solo i tagli.']];
+let micRec=null, micChunks=[], micFallback=false;
+function aiStatus(){const c=window.CFG||{};const n=$('#aiNote');if(!n)return;
+  if(!c.gemini_key_set)n.innerHTML='Per usarlo metti la chiave di Gemini in <b>⚙ Impostazioni</b> (è gratis).';
+  else if(P&&P.edit&&P.edit.ai_note)n.textContent='✨ Ultimo montaggio di Gemini: '+P.edit.ai_note;else n.textContent=''}
+function aiInit(){$('#aiChips').innerHTML=AI_PRESETS.map((p,i)=>`<button class="sm" onclick="$('#aiPrompt').value=AI_PRESETS[${i}][1]">${esc(p[0])}</button>`).join('');
+  const c=window.CFG||{};$('#aiVideo').checked=!!c.ai_video;if(P&&P.edit&&P.edit.ai_prompt&&!$('#aiPrompt').value)$('#aiPrompt').value=P.edit.ai_prompt;aiStatus()}
+async function aiGo(){const pr=$('#aiPrompt').value.trim();if(!pr){alert('Scrivimi o dimmi col microfono come vuoi il video');return}
+  if(!(window.CFG||{}).gemini_key_set){openCfg();return}
+  await edSave();const r=await api(`/api/project/${PID}/edit/ai`,{prompt:pr,video:$('#aiVideo').checked});
+  if(r.error)return alert(r.error);if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else{$('#jobbar').classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'})}}
+async function micToggle(){const b=$('#micBtn'),m=$('#micMsg');
+  if(micRec){ // stop
+    b.classList.remove('rec');m.textContent='Scrivo quello che hai detto…';
+    if(micFallback){micRec=null;const r=await api('/api/voice/rec',{stop:true});micDone(r);return}
+    micRec.stop();return}
+  try{
+    const st=await navigator.mediaDevices.getUserMedia({audio:true});
+    micChunks=[];micFallback=false;micRec=new MediaRecorder(st);
+    micRec.ondataavailable=e=>{if(e.data.size)micChunks.push(e.data)};
+    micRec.onstop=async()=>{st.getTracks().forEach(t=>t.stop());const blob=new Blob(micChunks,{type:micRec.mimeType||'audio/webm'});micRec=null;
+      const r=await fetch('/api/voice',{method:'POST',body:blob}).then(x=>x.json()).catch(e=>({error:String(e)}));micDone(r)};
+    micRec.start();b.classList.add('rec');m.textContent='🔴 Ti ascolto… ripremi 🎤 quando hai finito.';
+  }catch(e){ // la finestra non può usare il microfono: registra Jarvis direttamente
+    const r=await api('/api/voice/rec',{start:true});
+    if(r.error){m.textContent='⚠ Microfono non disponibile: '+r.error;return}
+    micFallback=true;micRec=true;b.classList.add('rec');m.textContent='🔴 Ti ascolto ('+r.device+')… ripremi 🎤 quando hai finito.'}}
+function micDone(r){const m=$('#micMsg');if(r.error){m.textContent='⚠ '+r.error;return}
+  const t=(r.text||'').trim();if(!t){m.textContent='Non ho sentito niente, riprova.';return}
+  const a=$('#aiPrompt');a.value=(a.value.trim()?a.value.trim()+' ':'')+t;m.textContent='✅ Fatto: controlla il testo e premi "Monta come ho detto".'}
+
 /* ---------- 4b: EDITOR ---------- */
 let ED=null, edrag=null, hist=[], redo=[], saveT=null, raf=null, montato=true, sel=null;
 const T_IN=0.26, T_OUT=0.18, LANES={ruler:[0,18],audio:[20,58],cut:[82,46],zoom:[134,46]};
@@ -786,6 +845,8 @@ async function fcStatus(){const el=$('#fcStat');if(!el)return;let d;try{d=await 
 async function fcInstall(){await api('/api/filmcraft',{});setTimeout(fcStatus,300)}
 async function edLoad(){
   fcStatus();
+  if(!window.CFG){try{window.CFG=await api('/api/config')}catch(e){}}
+  aiInit();
   const v=$('#ev');
   const p=P; if(!p.edit){return}
   const e=JSON.parse(JSON.stringify(p.edit));
