@@ -4,3 +4,4 @@ faster-whisper>=1.0
 yt-dlp[default,curl-cffi]
 imageio-ffmpeg
 opencv-python-headless<5
+pillow>=10
