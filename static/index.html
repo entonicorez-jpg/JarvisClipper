@@ -403,7 +403,7 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
   <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
     <b>✨ Google Gemini (montaggio a parole)</b>
     <div style="color:var(--mut);font-size:13px;margin:4px 0">Nell'editor dici o scrivi come vuoi il video e Gemini fa tagli e zoom. La chiave è gratis su <b>aistudio.google.com</b> → "Get API key".</div>
-    <label>Chiave API Gemini <input type="password" id="cGem" placeholder="AIza… (lascia vuoto per non cambiarla)"></label>
+    <label>Chiave API Gemini <span id="cGemOk" style="color:var(--acc);font-weight:700"></span> <input type="password" id="cGem" placeholder="AIza… (lascia vuoto per non cambiarla)"></label>
   </div>
   <label>Secondi prima del picco <input type="number" id="cPre"></label>
   <label>Secondi dopo il picco <input type="number" id="cPost"></label>
@@ -740,7 +740,7 @@ async function openFolder(){await api(`/api/project/${PID}/open`,{})}
 
 /* ---------- impostazioni ---------- */
 async function openCfg(){const c=await api('/api/config');window.CFG=c;$('#cKey').value='';$('#cKey').placeholder=c.api_key_set?'chiave salvata ✓ (scrivi per sostituirla)':'sk-ant-…';
-  $('#cGem').value='';$('#cGem').placeholder=c.gemini_key_set?'chiave salvata ✓ (scrivi per sostituirla)':'AIza… (gratis su aistudio.google.com)';
+  $('#cGem').value='';$('#cGemOk').textContent=c.gemini_key_set?'✓ salvata':'';$('#cGem').placeholder=c.gemini_key_set?'chiave salvata ✓ (scrivi per sostituirla)':'AIza… (gratis su aistudio.google.com)';
   $('#cModel').value=c.ai_model;$('#cPre').value=c.pre;$('#cPost').value=c.post;$('#cfg').classList.add('on');gpuRefresh()}
 function closeCfg(){$('#cfg').classList.remove('on');clearInterval(window.gpuT)}
 async function gpuRefresh(){const g=await api('/api/gpu');
@@ -748,8 +748,8 @@ async function gpuRefresh(){const g=await api('/api/gpu');
   $('#gpuBtn').disabled=g.running||g.installed;$('#gpuBtn').style.display=(g.nvidia||g.installed||g.running)?'':'none';
   $('#gpuBar').style.width=(g.progress*100)+'%';return g}
 async function gpuInstall(){await api('/api/gpu',{});clearInterval(window.gpuT);window.gpuT=setInterval(async()=>{const g=await gpuRefresh();if(!g.running)clearInterval(window.gpuT)},1000)}
-async function saveCfg(){const b={ai_model:$('#cModel').value,pre:+$('#cPre').value,post:+$('#cPost').value};if($('#cKey').value)b.api_key=$('#cKey').value.trim();if($('#cGem').value)b.gemini_key=$('#cGem').value.trim();await api('/api/config',b);closeCfg();aiStatus()}
-async function clearKey(){await api('/api/config',{api_key:''});closeCfg()}
+async function saveCfg(){const b={ai_model:$('#cModel').value,pre:+$('#cPre').value,post:+$('#cPost').value};if($('#cKey').value)b.api_key=$('#cKey').value.trim();if($('#cGem').value)b.gemini_key=$('#cGem').value.trim();window.CFG=await api('/api/config',b);closeCfg();aiStatus()}
+async function clearKey(){window.CFG=await api('/api/config',{api_key:'',gemini_key:''});closeCfg();aiStatus()}
 
 
 /* ---------- 4b: riquadro cam per gli zoom (proporzioni libere) ---------- */
@@ -805,6 +805,7 @@ function aiStatus(){const c=window.CFG||{};const n=$('#aiNote');if(!n)return;
 function aiInit(){$('#aiChips').innerHTML=AI_PRESETS.map((p,i)=>`<button class="sm" onclick="$('#aiPrompt').value=AI_PRESETS[${i}][1]">${esc(p[0])}</button>`).join('');
   const c=window.CFG||{};$('#aiVideo').checked=!!c.ai_video;if(P&&P.edit&&P.edit.ai_prompt&&!$('#aiPrompt').value)$('#aiPrompt').value=P.edit.ai_prompt;aiStatus()}
 async function aiGo(){const pr=$('#aiPrompt').value.trim();if(!pr){alert('Scrivimi o dimmi col microfono come vuoi il video');return}
+  try{window.CFG=await api('/api/config')}catch(e){}
   if(!(window.CFG||{}).gemini_key_set){openCfg();return}
   await edSave();const r=await api(`/api/project/${PID}/edit/ai`,{prompt:pr,video:$('#aiVideo').checked});
   if(r.error)return alert(r.error);if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else{$('#jobbar').classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'})}}
