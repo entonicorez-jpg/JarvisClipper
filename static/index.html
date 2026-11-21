@@ -349,7 +349,7 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
             <label class="field">Forza <select id="eZoom2" onchange="edSetStyle()"><option value="1.18">Leggero · 118%</option><option value="1.32">Normale · 132%</option><option value="1.5">Forte · 150%</option></select></label>
             <label class="tog"><input type="checkbox" id="eBlur2" onchange="edSetStyle()"> Motion blur in entrata</label>
             <label class="tog"><input type="checkbox" id="eOut2" onchange="edSetStyle()"> Uscita animata</label>
-            <label class="tog"><input type="checkbox" id="eSfx2" onchange="edSetStyle()" checked> Swoosh sugli zoom</label>
+            <label class="tog"><input type="checkbox" id="eSfx2" onchange="edSetStyle()"> Swoosh sugli zoom</label>
             <button class="big2" onclick="edTruePreview()">🎬 Anteprima vera di 30 s da qui</button>
             <div class="hint">Nel player vedi già tagli e zoom dal vivo; l'anteprima vera mostra il motion blur definitivo.</div>
           </div>
@@ -797,7 +797,7 @@ async function edLoad(){
   v.onloadedmetadata=()=>{if(v.currentTime<ED.range[0]||v.currentTime>ED.range[1])v.currentTime=(ED.keep[0]||ED.range)[0]};
   if(v.readyState>0)v.currentTime=(ED.keep[0]||ED.range)[0];
   $('#eZoom2').value=String([1.18,1.32,1.5].reduce((a,b)=>Math.abs(b-ED.zoom)<Math.abs(a-ED.zoom)?b:a));
-  $('#eBlur2').checked=ED.blur;$('#eOut2').checked=ED.out==='blur';$('#eSfx2').checked=ED.sfx!==false;
+  $('#eBlur2').checked=ED.blur;$('#eOut2').checked=ED.out==='blur';$('#eSfx2').checked=ED.zoom_sfx===true;
   api(`/api/project/${PID}/energy?start=${e.range[0]}&end=${e.range[1]}&step=0.5`).then(d=>{ED.energy=d;edDraw()});
   edStats();edInsp();
   if(!ED.ro){ED.ro=new ResizeObserver(()=>edDraw());ED.ro.observe($('#etlBox'))}
@@ -955,7 +955,7 @@ function edDelete(){if(!sel)return;pushHist();
 function edRestore(){if(!sel||sel.type!=='gap')return;const {a,b}=sel;const keep=[...ED.keep,[a,b]].sort((p,q)=>p[0]-q[0]);
   const m=[];for(const k of keep){if(m.length&&k[0]<=m[m.length-1][1]+0.01)m[m.length-1][1]=Math.max(m[m.length-1][1],k[1]);else m.push([...k])}ED.keep=m;sel=null;edChanged()}
 function edSetLv(lv){const z=ED.zooms.find(q=>sel&&q.id===sel.id);if(!z)return;pushHist();z.lv=lv;edChanged()}
-function edSetStyle(){ED.zoom=+$('#eZoom2').value;ED.blur=$('#eBlur2').checked;ED.out=$('#eOut2').checked?'blur':'netto';ED.sfx=$('#eSfx2').checked;edChanged()}
+function edSetStyle(){ED.zoom=+$('#eZoom2').value;ED.blur=$('#eBlur2').checked;ED.out=$('#eOut2').checked?'blur':'netto';ED.zoom_sfx=$('#eSfx2').checked;edChanged()}
 function edGo(t){const v=$('#ev');v.currentTime=Math.max(ED.range[0],t-1.5);v.play()}
 function edInsp(){const box=$('#eInsp');let h='<h4>Selezione</h4>';
   if(!sel){h+='<div class="hint">Clicca un pezzo verde (tenuto), una parte rossa (tagliata) o uno zoom nella timeline.</div>'}

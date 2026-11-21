@@ -286,7 +286,7 @@ def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=
 
     # swoosh sugli zoom che entrano animati
     swooshes = []
-    if ed.get("sfx", True):
+    if ed.get("zoom_sfx", False):  # swoosh sugli zoom: spenti di base
         from . import sfx as _sfx
         starts = [z["start"] for z in adj if z.get("anim")] if flavor == "filmcraft" else [s0 for s0, s1, kind, a, b in fxclips if kind == "in"]
         for k, st in enumerate(starts):

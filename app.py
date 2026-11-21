@@ -498,7 +498,7 @@ def api_edit_save(pid):
         if "censor" in d:
             ed["censor"] = [{"s": float(c["s"]), "e": float(c["e"]), "w": str(c.get("w", ""))[:40], "on": bool(c.get("on", True))}
                             for c in d["censor"]]
-        for k in ("zoom", "blur", "out", "sfx"):
+        for k in ("zoom", "blur", "out", "sfx", "zoom_sfx"):
             if k in d:
                 ed[k] = d[k]
         ed["report"] = autoedit.report(ed)

@@ -2111,7 +2111,7 @@ index fd5f66c..fc6ef4d 100644
  	Add Guide…	Aggiungi guida…
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..4b8cb36
+index 0000000..bfdb2e8
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
 @@ -0,0 +1,902 @@
@@ -2193,7 +2193,7 @@ index 0000000..4b8cb36
 +            font_ok: None,
 +            msg: String::new(),
 +            pending: None,
-+            sfx: true,
++            sfx: false,
 +            sfx_gain: -3.0,
 +            cap: None,
 +            upd_checked: false,
@@ -3319,7 +3319,7 @@ index 4ec9555..26bdaf5 100644
  const RECENT_ROWS: usize = 6;
  const RECENT_ROW_H: f32 = 28.0;
 diff --git a/crates/ui-egui/src/panels/timeline.rs b/crates/ui-egui/src/panels/timeline.rs
-index 13b90a6..95ef78b 100644
+index 13b90a6..3e22b6a 100644
 --- a/crates/ui-egui/src/panels/timeline.rs
 +++ b/crates/ui-egui/src/panels/timeline.rs
 @@ -308,6 +308,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
@@ -3330,8 +3330,75 @@ index 13b90a6..95ef78b 100644
      let painter = ui.painter().clone();
      painter.rect_filled(rect, 0.0, t.panel_bg);
  
+@@ -330,19 +331,33 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
+     let ah = app.ui.timeline.audio_track_h;
+     let mut rows = Vec::new();
+     let nv = seq.video_tracks.len();
+-    let (video_tops, max_vs) = video_row_tops(video_area, nv, vh, &mut app.ui.timeline.v_scroll);
+-    for ((i, tr), top) in seq.video_tracks.iter().enumerate().zip(video_tops) {
+-        let rect = Rect::from_min_max(pos2(content.min.x, top), pos2(content.max.x, top + vh));
++    // Jarvis: ogni traccia può avere la sua altezza (rotellina sull'intestazione)
++    let th = |id: u64, d: f32| app.ui.timeline.track_h.get(&id).copied().unwrap_or(d);
++    let vhs: Vec<f32> = seq.video_tracks.iter().map(|t| th(t.id.0, vh)).collect();
++    let ahs: Vec<f32> = seq.audio_tracks.iter().map(|t| th(t.id.0, ah)).collect();
++    let vtotal = vh + vhs.iter().sum::<f32>();
++    let v_off = (video_area.height() - vtotal).max(0.0);
++    let max_vs = (vtotal - video_area.height()).max(0.0);
++    app.ui.timeline.v_scroll = app.ui.timeline.v_scroll.clamp(0.0, max_vs);
++    let base = video_area.min.y + v_off - (max_vs - app.ui.timeline.v_scroll) + vh;
++    for (i, tr) in seq.video_tracks.iter().enumerate() {
++        let above: f32 = vhs[i + 1..].iter().sum();
++        let top = base + above;
++        let rect = Rect::from_min_max(pos2(content.min.x, top), pos2(content.max.x, top + vhs[i]));
+         rows.push(Row { track: tr.id, kind: TrackKind::Video, index: i, rect, lane: false });
+     }
++    let _ = nv;
+     let na = seq.audio_tracks.len();
+-    let max_as = (na as f32 * ah - audio_area.height()).max(0.0);
++    let atotal: f32 = ahs.iter().sum();
++    let max_as = (atotal - audio_area.height()).max(0.0);
+     app.ui.timeline.a_scroll = app.ui.timeline.a_scroll.clamp(0.0, max_as);
++    let mut top = audio_area.min.y - app.ui.timeline.a_scroll;
+     for (i, tr) in seq.audio_tracks.iter().enumerate() {
+-        let top = audio_area.min.y + i as f32 * ah - app.ui.timeline.a_scroll;
+-        let rect = Rect::from_min_max(pos2(content.min.x, top), pos2(content.max.x, top + ah));
++        let rect = Rect::from_min_max(pos2(content.min.x, top), pos2(content.max.x, top + ahs[i]));
++        top += ahs[i];
+         rows.push(Row { track: tr.id, kind: TrackKind::Audio, index: i, rect, lane: app.ui.timeline.track_lanes.contains_key(&tr.id.0) });
+     }
++    let _ = na;
+     let (v_scroll, a_scroll) = (app.ui.timeline.v_scroll, app.ui.timeline.a_scroll);
+     let layout = Layout { content, ruler, rows: rows.clone(), pps, scroll, split_y, v_scroll, a_scroll };
+     app.tl.layout = Some(layout.clone());
+diff --git a/crates/ui-egui/src/panels/timeline/headers.rs b/crates/ui-egui/src/panels/timeline/headers.rs
+index 4cc5973..7a65dc1 100644
+--- a/crates/ui-egui/src/panels/timeline/headers.rs
++++ b/crates/ui-egui/src/panels/timeline/headers.rs
+@@ -183,8 +183,12 @@ pub(super) fn draw_headers(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequ
+             }
+             if eresp.dragged() {
+                 let d = eresp.drag_delta().y * if r.kind == TrackKind::Video { -1.0 } else { 1.0 };
+-                let h = if r.kind == TrackKind::Video { &mut app.ui.timeline.video_track_h } else { &mut app.ui.timeline.audio_track_h };
+-                *h = (*h + d).clamp(22.0, 220.0);
++                if let Some(h) = app.ui.timeline.track_h.get_mut(&r.track.0) {
++                    *h = (*h + d).clamp(22.0, 260.0);
++                } else {
++                    let h = if r.kind == TrackKind::Video { &mut app.ui.timeline.video_track_h } else { &mut app.ui.timeline.audio_track_h };
++                    *h = (*h + d).clamp(22.0, 220.0);
++                }
+             }
+         }
+         let resp = ui.interact(
+@@ -193,6 +197,7 @@ pub(super) fn draw_headers(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequ
+             Sense::click(),
+         );
+         if resp.double_clicked() {
++            app.ui.timeline.track_h.remove(&r.track.0);
+             let h = if r.kind == TrackKind::Video { &mut app.ui.timeline.video_track_h } else { &mut app.ui.timeline.audio_track_h };
+             *h = if *h < 50.0 { 64.0 } else { 30.0 };
+         }
 diff --git a/crates/ui-egui/src/panels/timeline/interact.rs b/crates/ui-egui/src/panels/timeline/interact.rs
-index 7eb176f..700ac12 100644
+index 7eb176f..a6f69c8 100644
 --- a/crates/ui-egui/src/panels/timeline/interact.rs
 +++ b/crates/ui-egui/src/panels/timeline/interact.rs
 @@ -192,8 +192,21 @@ fn move_is_locked(seq: &Sequence, clips: &[ClipId], delta: i32) -> bool {
@@ -3357,7 +3424,22 @@ index 7eb176f..700ac12 100644
          return Some(tid);
      }
      for tracks in [&seq.video_tracks, &seq.audio_tracks] {
-@@ -286,7 +299,8 @@ fn wheel_scroll(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, layout: &
+@@ -279,6 +292,14 @@ fn wheel_scroll(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, layout: &
+         && let Some(p) = ctx.pointer_hover_pos()
+     {
+         let w = wheel_input(&ctx);
++        // Jarvis: rotellina sull'intestazione di una traccia (V1, A1…): su la ingrandisce, giù la rimpicciolisce
++        let on_header = p.x < layout.content.min.x && !w.alt && !w.command && w.delta.y != 0.0;
++        if on_header && let Some(r) = layout.rows.iter().find(|r| p.y >= r.rect.min.y && p.y < r.rect.max.y) {
++            let h = r.rect.height();
++            let nh = (h + w.delta.y * 0.25).clamp(22.0, 260.0);
++            app.ui.timeline.track_h.insert(r.track.0, nh);
++            return;
++        }
+         if (w.pinch - 1.0).abs() > 1e-4 || (w.alt && w.delta.y != 0.0) {
+             let f = if (w.pinch - 1.0).abs() > 1e-4 { w.pinch as f64 } else { (1.0_f64 + w.delta.y as f64 * 0.01).clamp(0.5, 2.0) };
+             let anchor_t = layout.tick_at(p.x).seconds();
+@@ -286,7 +307,8 @@ fn wheel_scroll(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, layout: &
              v.target_pps = (v.target_pps * f).clamp(min_pps(seq.duration().seconds(), app.last_timeline_width), 24_000.0);
              app.tl.zoom_anchor = Some((anchor_t, p.x));
          } else if w.delta != egui::Vec2::ZERO {
@@ -3367,7 +3449,7 @@ index 7eb176f..700ac12 100644
              let sideways = if w.delta.x.abs() > w.delta.y.abs() {
                  Some(w.delta.x)
              } else if wheel_sideways || w.shift {
-@@ -723,6 +737,7 @@ fn drag_update(app: &mut FilmcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
+@@ -723,6 +745,7 @@ fn drag_update(app: &mut FilmcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
                      (Some(c), Some(s)) if c.kind == s.kind => c.index as i32 - s.index as i32,
                      _ => 0,
                  };
@@ -3375,7 +3457,7 @@ index 7eb176f..700ac12 100644
                  if move_is_locked(seq, &clips, track_delta) {
                      ctx.set_cursor_icon(CursorIcon::NotAllowed);
                      Some(Drag::Move { clips, grab_tick, start_track, offset: Tick::ZERO, track_delta: 0, new_track: None, copy: mods.alt })
-@@ -873,7 +888,9 @@ fn commit_drag(app: &mut FilmcraftApp, ctx: &egui::Context, resp: &egui::Respons
+@@ -873,7 +896,9 @@ fn commit_drag(app: &mut FilmcraftApp, ctx: &egui::Context, resp: &egui::Respons
              let r = match d {
                  Drag::Move { clips, offset, track_delta, new_track, copy, .. } if offset != Tick::ZERO || track_delta != 0 || new_track.is_some() => {
                      // #1104: dropped past the last track, the clips go onto a new one
@@ -3386,6 +3468,28 @@ index 7eb176f..700ac12 100644
                      let mut seen = std::collections::HashSet::new();
                      let moves: Vec<Value> = clips
                          .iter()
+diff --git a/crates/ui-egui/src/state.rs b/crates/ui-egui/src/state.rs
+index e3a7852..7a2ca97 100644
+--- a/crates/ui-egui/src/state.rs
++++ b/crates/ui-egui/src/state.rs
+@@ -189,6 +189,9 @@ pub struct TimelineView {
+     pub split: f32,
+     pub video_track_h: f32,
+     pub audio_track_h: f32,
++    /// Jarvis: altezza di singole tracce (rotellina sull'intestazione), per id della traccia.
++    #[serde(default)]
++    pub track_h: std::collections::HashMap<u64, f32>,
+     pub header_w: f32,
+     pub show_thumbnails: bool,
+     /// Which frames a video clip shows while `show_thumbnails` is on (the wrench menu).
+@@ -236,6 +239,7 @@ impl Default for TimelineView {
+             split: 0.5,
+             video_track_h: 60.0,
+             audio_track_h: 56.0,
++            track_h: Default::default(),
+             header_w: 204.0,
+             show_thumbnails: true,
+             thumbnail_mode: ThumbnailMode::Head,
 diff --git a/packaging/windows/package.ps1 b/packaging/windows/package.ps1
 index 0569139..2de011f 100644
 --- a/packaging/windows/package.ps1
