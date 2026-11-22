@@ -60,6 +60,15 @@ if __name__ == "__main__":
                     pass
                 ok = True
             os._exit(0 if ok else 1)
+    if "--social" in sys.argv:
+        i = sys.argv.index("--social")
+        try:
+            from core import social
+            ok = social.run(sys.argv[i + 1], sys.argv[i + 2])
+        except Exception:
+            traceback.print_exc()
+            ok = False
+        os._exit(0 if ok else 1)
     for flag in ("--tiktok-title", "--emoji-setup"):
         if flag in sys.argv:
             # chiamato da FilmCraft Jarvis per i Titoli TikTok: niente finestra

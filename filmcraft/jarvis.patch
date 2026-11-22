@@ -209,10 +209,10 @@ index 44399e4..f4606e8 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..81e034f
+index 0000000..d43ea01
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,1752 @@
+@@ -0,0 +1,1760 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -1083,7 +1083,7 @@ index 0000000..81e034f
 +            r#"{"preset":"c_zoom_in|c_zoom_spin|c_slide_left|c_slide_right|c_slide_up|c_slide_down|c_whip|c_glitch|c_impact|c_mix","scope":"playhead|selection|all"?,"frames":n?}"#,
 +            composer,
 +        ),
-+        spec("jarvis.placeTitle", "Jarvis: Titolo TikTok", r#"{"path":str,"time":ticks?,"seconds":f=3}"#, place_title),
++        spec("jarvis.placeTitle", "Jarvis: Titolo TikTok", r#"{"path":str,"time":ticks?,"seconds":f=3 (video: tutta la sua durata se manca),"track":str?}"#, place_title),
 +        spec("jarvis.composerItem", "Jarvis: Transizione Premiere Composer", r#"{"path":str,"time":ticks?,"scope":"playhead|selection|all"?,"sfx":bool?,"sfxGain":f?}"#, mh_apply),
 +        spec("jarvis.clipFx", "Jarvis: Effetto clip", r#"{"preset":"punch|zoom_in|zoom_out|shake","amount":f?}"#, clip_fx),
 +    ]
@@ -1931,13 +1931,21 @@ index 0000000..81e034f
 +    let seq_id = s.state.active_sequence.ok_or(EngineError::NoSequence)?;
 +    let rate = s.sequence_rate();
 +    let at = p["time"].as_i64().map(Tick).unwrap_or_else(|| s.playhead());
-+    let dur = Tick::from_seconds_f64(f64_p(p, "seconds").unwrap_or(3.0).clamp(0.2, 600.0));
++    let track_name = str_p(p, "track").unwrap_or(TITLE_TRACK).to_string();
 +    let item = match media_with_path(s, &path) {
 +        Some(i) => i,
 +        None => {
 +            let r = s.execute("file.import", json!({"paths": [path.clone()]}))?;
 +            r["items"].as_array().and_then(|a| a.first()).and_then(Value::as_u64).map(filmcraft_project::ItemId).ok_or_else(|| bad("jarvis.placeTitle", "non riesco a importare il titolo"))?
 +        }
++    };
++    let media_dur = match s.project.item(item).map(|i| &i.kind) {
++        Some(filmcraft_project::ItemKind::Media(m)) if [".webm", ".mp4", ".mov"].iter().any(|e| path.to_lowercase().ends_with(e)) => Some(m.duration()),
++        _ => None,
++    };
++    let dur = match (f64_p(p, "seconds"), media_dur) {
++        (None, Some(d)) => d,
++        (sec, _) => Tick::from_seconds_f64(sec.unwrap_or(3.0).clamp(0.2, 600.0)),
 +    };
 +    let clip = s.edit("Titolo TikTok", |pr, _st| {
 +        let t = rate.snap(at.max(Tick::ZERO));
@@ -1948,12 +1956,12 @@ index 0000000..81e034f
 +        let q = pr.sequence_mut(seq_id).ok_or(EngineError::NoSequence)?;
 +        let range = ti.range();
 +        let free = |tr: &Track| !tr.items.iter().any(|i| i.range().overlaps(&range));
-+        let idx = match q.video_tracks.iter().position(|tr| tr.name == TITLE_TRACK && free(tr)) {
++        let idx = match q.video_tracks.iter().position(|tr| tr.name == track_name && free(tr)) {
 +            Some(i) => i,
 +            None => {
 +                // sopra a tutto, tranne i sottotitoli che restano in cima
 +                let at = q.video_tracks.iter().position(|tr| tr.name == CAPTION_TRACK).unwrap_or(q.video_tracks.len());
-+                q.video_tracks.insert(at, Track::new(tid, TrackKind::Video, TITLE_TRACK.to_string()));
++                q.video_tracks.insert(at, Track::new(tid, TrackKind::Video, track_name.clone()));
 +                at
 +            }
 +        };
@@ -2593,6 +2601,249 @@ index 0000000..051deb1
 +    }
 +    format!("{n_cut} tagli · {n} modifiche")
 +}
+diff --git a/crates/ui-egui/src/jarvis_social.rs b/crates/ui-egui/src/jarvis_social.rs
+new file mode 100644
+index 0000000..e08bb9e
+--- /dev/null
++++ b/crates/ui-egui/src/jarvis_social.rs
+@@ -0,0 +1,237 @@
++//! Jarvis Composer › Social: pannellini animati come quelli di Premiere Composer (tasto Iscriviti di
++//! YouTube, pannello Instagram con Segui, scheda "Tempo di visualizzazione degli iscritti"). Li disegna
++//! Jarvis Clipper (`--social`) come video trasparente grande come la sequenza; vanno sulla traccia
++//! "Social Jarvis" all'indicatore. Nome, avatar e scelte si ricordano.
++
++use std::sync::{Arc, Mutex};
++
++use serde_json::{Value, json};
++
++type Job = Arc<Mutex<Option<Result<String, String>>>>;
++
++const PRESETS: &[(&str, &str, &str)] = &[
++    ("yt_sub", "▶ Iscriviti a YouTube", "Pannello con avatar e nome: arriva il cursore, clic su ISCRIVITI e diventa ISCRITTO"),
++    ("ig_follow", "📷 Segui su Instagram", "Pannello bianco con avatar e nome: clic su Segui e diventa Segui già"),
++    ("yt_watch", "📊 Iscritti vs non iscritti", "La scheda di YouTube Studio: la barra e le percentuali salgono da 0"),
++];
++
++pub(crate) struct Social {
++    preset: usize,
++    dark: bool,
++    yt_name: String,
++    yt_sub: String,
++    ig_name: String,
++    ig_sub: String,
++    avatar: String,
++    value: f32,
++    y: f32,
++    secs: f32,
++    loaded: bool,
++    job: Option<Job>,
++    msg: String,
++}
++
++impl Default for Social {
++    fn default() -> Self {
++        Self {
++            preset: 0,
++            dark: true,
++            yt_name: "MrJake".into(),
++            yt_sub: "Nuovi video ogni settimana".into(),
++            ig_name: "Giacchetta".into(),
++            ig_sub: "Instagram".into(),
++            avatar: String::new(),
++            value: 24.2,
++            y: 78.0,
++            secs: 4.5,
++            loaded: false,
++            job: None,
++            msg: String::new(),
++        }
++    }
++}
++
++fn store() -> Option<std::path::PathBuf> {
++    let base = std::env::var_os("APPDATA").or_else(|| std::env::var_os("HOME")).map(std::path::PathBuf::from)?;
++    Some(base.join("FilmCraft").join("jarvis_social.json"))
++}
++
++impl Social {
++    fn load(&mut self) {
++        self.loaded = true;
++        let Some(v) = store().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { return };
++        let s = |k: &str, d: &mut String| {
++            if let Some(x) = v[k].as_str() {
++                *d = x.to_string();
++            }
++        };
++        s("yt_name", &mut self.yt_name);
++        s("yt_sub", &mut self.yt_sub);
++        s("ig_name", &mut self.ig_name);
++        s("ig_sub", &mut self.ig_sub);
++        s("avatar", &mut self.avatar);
++        if let Some(b) = v["dark"].as_bool() {
++            self.dark = b;
++        }
++    }
++
++    fn save(&self) {
++        if let Some(f) = store() {
++            let _ = std::fs::create_dir_all(f.parent().unwrap_or(std::path::Path::new(".")));
++            let _ = std::fs::write(
++                f,
++                json!({"yt_name": self.yt_name, "yt_sub": self.yt_sub, "ig_name": self.ig_name, "ig_sub": self.ig_sub, "avatar": self.avatar, "dark": self.dark}).to_string(),
++            );
++        }
++    }
++}
++
++/// La scheda. Ritorna il comando per mettere l'animazione pronta nella timeline.
++pub(crate) fn tab(
++    s: &mut Social,
++    ui: &mut egui::Ui,
++    ctx: &egui::Context,
++    seq: Option<(u32, u32, f64)>,
++    proj: Option<String>,
++    pick: &mut bool,
++) -> Option<(String, Value, String)> {
++    if !s.loaded {
++        s.load();
++    }
++    ui.heading("📢 Social");
++    if filmcraft_engine::jarvis::jarvis_exe().is_none() {
++        ui.label("Serve Jarvis Clipper aggiornato: disegna lui queste animazioni.");
++        return None;
++    }
++    ui.horizontal_wrapped(|ui| {
++        for (i, (_, name, tip)) in PRESETS.iter().enumerate() {
++            let b = ui.add_sized([170.0, 46.0], egui::Button::selectable(s.preset == i, egui::RichText::new(*name).strong()));
++            if b.on_hover_text(*tip).clicked() {
++                s.preset = i;
++            }
++        }
++    });
++    ui.small(PRESETS[s.preset].2);
++    ui.add_space(4.0);
++    let id = PRESETS[s.preset].0;
++    let mut changed = false;
++    match id {
++        "yt_sub" => {
++            ui.horizontal(|ui| {
++                ui.label("Nome canale");
++                changed |= ui.text_edit_singleline(&mut s.yt_name).changed();
++            });
++            ui.horizontal(|ui| {
++                ui.label("Sotto il nome");
++                changed |= ui.text_edit_singleline(&mut s.yt_sub).changed();
++            });
++        }
++        "ig_follow" => {
++            ui.horizontal(|ui| {
++                ui.label("Nome account");
++                changed |= ui.text_edit_singleline(&mut s.ig_name).changed();
++            });
++            ui.horizontal(|ui| {
++                ui.label("Sotto il nome");
++                changed |= ui.text_edit_singleline(&mut s.ig_sub).changed();
++            });
++        }
++        _ => {
++            ui.horizontal(|ui| {
++                ui.label("Iscritti");
++                ui.add(egui::Slider::new(&mut s.value, 1.0..=99.0).suffix(" %").fixed_decimals(1));
++                ui.small(format!("(non iscritti {:.1} %)", 100.0 - s.value));
++            });
++        }
++    }
++    if id != "ig_follow" {
++        ui.horizontal(|ui| {
++            changed |= ui.radio_value(&mut s.dark, true, "Scuro").changed();
++            changed |= ui.radio_value(&mut s.dark, false, "Chiaro").changed();
++        });
++    }
++    if id != "yt_watch" {
++        ui.horizontal(|ui| {
++            ui.label("Immagine profilo");
++            let name = std::path::Path::new(&s.avatar).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "(nessuna: metto l'iniziale)".into());
++            ui.small(name);
++            if ui.button("Scegli…").clicked() {
++                *pick = true;
++            }
++        });
++    }
++    ui.horizontal(|ui| {
++        ui.label("Altezza");
++        ui.add(egui::Slider::new(&mut s.y, 15.0..=90.0).suffix(" %"));
++        ui.label("Durata");
++        ui.add(egui::Slider::new(&mut s.secs, 3.0..=10.0).suffix(" s"));
++    });
++    if changed {
++        s.save();
++    }
++    let busy = s.job.is_some();
++    let b = ui.add_enabled(!busy, egui::Button::new(if busy { "⏳ Preparo l'animazione…" } else { "➕ Aggiungi alla timeline" }).min_size(egui::vec2(ui.available_width(), 30.0)));
++    let (w, h, fps) = seq.unwrap_or((1080, 1920, 30.0));
++    if b.clicked() {
++        let base = proj
++            .as_ref()
++            .and_then(|p| std::path::Path::new(p).parent().map(|d| d.join("Social Jarvis")))
++            .or_else(|| std::env::var_os("USERPROFILE").map(|u| std::path::PathBuf::from(u).join("Documents").join("Social Jarvis")))
++            .unwrap_or_else(|| std::env::temp_dir().join("Social Jarvis"));
++        let _ = std::fs::create_dir_all(&base);
++        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() % 1_000_000).unwrap_or(0);
++        let out = base.join(format!("{id}_{stamp}.webm"));
++        let (name, sub) = match id {
++            "yt_sub" => (s.yt_name.clone(), s.yt_sub.clone()),
++            "ig_follow" => (s.ig_name.clone(), s.ig_sub.clone()),
++            _ => (String::new(), String::new()),
++        };
++        let job = json!({"preset": id, "w": w, "h": h, "fps": fps, "name": name, "subtitle": if sub.is_empty() { Value::Null } else { json!(sub) },
++                         "avatar": s.avatar, "theme": if s.dark { "dark" } else { "light" }, "value": s.value, "y": s.y / 100.0, "seconds": s.secs});
++        let jp = std::env::temp_dir().join(format!("jarvis-social-{stamp}.json"));
++        let _ = std::fs::write(&jp, job.to_string());
++        let j: Job = Arc::new(Mutex::new(None));
++        let jj = j.clone();
++        let o = out.clone();
++        std::thread::spawn(move || {
++            let r = (|| -> Result<String, String> {
++                let exe = filmcraft_engine::jarvis::jarvis_exe().ok_or("Serve Jarvis Clipper")?;
++                let mut cmd = std::process::Command::new(exe);
++                cmd.arg("--social").arg(&jp).arg(&o);
++                #[cfg(windows)]
++                {
++                    use std::os::windows::process::CommandExt;
++                    cmd.creation_flags(0x0800_0000);
++                }
++                let st = cmd.status().map_err(|e| e.to_string())?;
++                if st.success() && o.is_file() { Ok(o.to_string_lossy().to_string()) } else { Err("Jarvis Clipper non è riuscito a creare l'animazione (aggiornalo)".into()) }
++            })();
++            if let Ok(mut g) = jj.lock() {
++                *g = Some(r);
++            }
++        });
++        s.job = Some(j);
++        s.msg.clear();
++    }
++    let mut run = None;
++    if let Some(r) = s.job.as_ref().and_then(|j| j.lock().ok().and_then(|mut g| g.take())) {
++        s.job = None;
++        match r {
++            Ok(path) => run = Some(("jarvis.placeTitle".to_string(), json!({"path": path, "track": "Social Jarvis"}), String::new())),
++            Err(e) => s.msg = format!("⚠ {e}"),
++        }
++    } else if s.job.is_some() {
++        ctx.request_repaint_after(std::time::Duration::from_millis(250));
++    }
++    ui.small("Sale dal basso, fa l'animazione e riscende. Va sulla traccia \"Social Jarvis\" all'indicatore (video trasparente, lo sposti come una clip).");
++    if !s.msg.is_empty() {
++        ui.label(&s.msg);
++    }
++    run
++}
++
++/// Dopo "Scegli…": l'immagine profilo scelta.
++pub(crate) fn set_avatar(s: &mut Social, path: String) {
++    s.avatar = path;
++    s.save();
++}
 diff --git a/crates/ui-egui/src/jarvis_titles.rs b/crates/ui-egui/src/jarvis_titles.rs
 new file mode 100644
 index 0000000..9c8196e
@@ -2966,10 +3217,10 @@ index 0000000..9c8196e
 +}
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..94a6a71
+index 0000000..99faea2
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
-@@ -0,0 +1,969 @@
+@@ -0,0 +1,985 @@
 +//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
 +
 +use serde_json::{Value, json};
@@ -3019,6 +3270,7 @@ index 0000000..94a6a71
 +    thumbs: std::collections::HashMap<std::path::PathBuf, Option<egui::TextureHandle>>,
 +    titles: crate::jarvis_titles::Titles,
 +    pub(crate) assist: crate::jarvis_assist::Assist,
++    pub(crate) social: crate::jarvis_social::Social,
 +}
 +
 +type CapResult = Result<Vec<(filmcraft_project::ItemId, filmcraft_project::Transcript)>, String>;
@@ -3067,6 +3319,7 @@ index 0000000..94a6a71
 +            thumbs: Default::default(),
 +            titles: Default::default(),
 +            assist: Default::default(),
++            social: Default::default(),
 +        }
 +    }
 +}
@@ -3080,7 +3333,7 @@ index 0000000..94a6a71
 +/// Apre Jarvis Composer su una scheda (0 Composer, 1 Sottotitoli, 2 Transizioni ed effetti).
 +pub(crate) fn open_tab(app: &mut FilmcraftApp, tab: usize) {
 +    app.jarvis_ui.open = true;
-+    app.jarvis_ui.tab = tab.min(4);
++    app.jarvis_ui.tab = tab.min(5);
 +}
 +
 +pub(crate) fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
@@ -3113,6 +3366,8 @@ index 0000000..94a6a71
 +    let mut follow = app.session.state.selection_follows_playhead;
 +    let follow_before = follow;
 +    let seq_size = app.session.active_sequence().map(|q| (q.settings.width, q.settings.height));
++    let seq_fps = app.session.active_sequence().map(|q| q.settings.frame_rate.as_f64()).unwrap_or(30.0);
++    let mut pick_avatar = false;
 +    let proj_path = app.session.path.clone();
 +    let st = &mut app.jarvis_ui;
 +    if st.font_ok.as_ref().map_or(true, |(f, _)| *f != st.font) {
@@ -3126,7 +3381,7 @@ index 0000000..94a6a71
 +        .default_pos(ctx.content_rect().right_top() + egui::vec2(-400.0, 80.0))
 +        .show(ctx, |ui| {
 +            ui.horizontal(|ui| {
-+                for (i, t) in ["🎞 Composer", "🔤 Sottotitoli", "🎬 Transizioni ed effetti", "🆎 Titoli TikTok", "✨ Gemini"].iter().enumerate() {
++                for (i, t) in ["🎞 Composer", "🔤 Sottotitoli", "🎬 Transizioni ed effetti", "🆎 Titoli TikTok", "📢 Social", "✨ Gemini"].iter().enumerate() {
 +                    ui.selectable_value(&mut st.tab, i, egui::RichText::new(*t).size(15.0).strong());
 +                }
 +            });
@@ -3239,8 +3494,14 @@ index 0000000..94a6a71
 +            ui.small("Finiscono sulla traccia \"Sottotitoli Jarvis\": ogni pezzo si modifica come un testo normale.");
 +            ui.small("Se il video viene da Jarvis Clipper uso la sua trascrizione (più precisa e immediata); \"Ritrascrivi\" la rifà da capo.");
 +            }
-+            if st.tab == 4 {
++            if st.tab == 5 {
 +                crate::jarvis_assist::tab(&mut st.assist, ui, ctx);
++            }
++            if st.tab == 4 {
++                let seq3 = seq_size.map(|(w, h)| (w, h, seq_fps));
++                if let Some(r) = crate::jarvis_social::tab(&mut st.social, ui, ctx, seq3, proj_path.clone(), &mut pick_avatar) {
++                    run = Some(r);
++                }
 +            }
 +            if st.tab == 3 {
 +                if let Some(r) = crate::jarvis_titles::tab(&mut st.titles, ui, ctx, seq_size, proj_path.clone()) {
@@ -3333,6 +3594,12 @@ index 0000000..94a6a71
 +            } else {
 +                run = None;
 +            }
++        }
++    }
++    if pick_avatar {
++        let files = app.hooks.pick_files.as_mut().map(|f| f(&["png", "jpg", "jpeg", "webp"])).unwrap_or_default();
++        if let Some(f) = files.into_iter().next() {
++            crate::jarvis_social::set_avatar(&mut app.jarvis_ui.social, f);
 +        }
 +    }
 +    if run.as_ref().is_some_and(|(c, _, _)| c == "jarvis.importPresets") {
@@ -3940,20 +4207,21 @@ index 0000000..94a6a71
 +    out
 +}
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
-index c3fb34a..cecca2f 100644
+index c3fb34a..1a00364 100644
 --- a/crates/ui-egui/src/lib.rs
 +++ b/crates/ui-egui/src/lib.rs
-@@ -73,6 +73,9 @@ pub mod state;
+@@ -73,6 +73,10 @@ pub mod state;
  pub mod theme;
  mod theme_favorites;
  pub mod updates_ui;
 +pub(crate) mod jarvis_ui;
 +pub(crate) mod jarvis_titles;
 +pub(crate) mod jarvis_assist;
++pub(crate) mod jarvis_social;
  pub mod widgets;
  
  use std::collections::HashMap;
-@@ -215,6 +218,7 @@ pub struct FilmcraftApp {
+@@ -215,6 +219,7 @@ pub struct FilmcraftApp {
      pub hooks: HostHooks,
      pub dialog: Option<Dialog>,
      pub(crate) updates_rt: updates_ui::Runtime,
@@ -3961,7 +4229,7 @@ index c3fb34a..cecca2f 100644
      pub file_dialogs: panels::file_dialogs::FileDialogState,
      /// The native file dialog the host is showing ([`Self::pick`]).
      native_dialog: Option<native_dialogs::PendingDialog>,
-@@ -351,6 +355,8 @@ pub struct FilmcraftApp {
+@@ -351,6 +356,8 @@ pub struct FilmcraftApp {
      fonts_ready: bool,
      pub integrated_titlebar: bool,
      pub last_timeline_width: f32,
@@ -3993,6 +4261,67 @@ index 5f1e294..773f599 100644
          "app.checkForUpdates" => {
              let _ = crate::updates_ui::check(app);
              return Ok(serde_json::Value::Null);
+diff --git a/crates/ui-egui/src/panels/export_mode.rs b/crates/ui-egui/src/panels/export_mode.rs
+index b4ae463..5269aa1 100644
+--- a/crates/ui-egui/src/panels/export_mode.rs
++++ b/crates/ui-egui/src/panels/export_mode.rs
+@@ -170,6 +170,26 @@ pub fn export_params(app: &FilmcraftApp) -> Value {
+     p
+ }
+ 
++/// Jarvis: dove si salva l'ultima cartella di export scelta.
++fn dir_file() -> Option<std::path::PathBuf> {
++    let base = std::env::var_os("APPDATA").or_else(|| std::env::var_os("HOME")).map(std::path::PathBuf::from)?;
++    Some(base.join("FilmCraft").join("jarvis_export_dir.txt"))
++}
++
++pub(super) fn remember_dir(d: &str) {
++    if let Some(f) = dir_file()
++        && !d.trim().is_empty()
++    {
++        let _ = std::fs::create_dir_all(f.parent().unwrap_or(std::path::Path::new(".")));
++        let _ = std::fs::write(f, d.trim());
++    }
++}
++
++fn remembered_dir() -> Option<String> {
++    let d = std::fs::read_to_string(dir_file()?).ok()?.trim().to_string();
++    std::path::Path::new(&d).is_dir().then_some(d)
++}
++
+ fn sync_sequence(app: &mut FilmcraftApp) {
+     let Some(seq) = app.session.state.active_sequence else { return };
+     if app.ui.export.for_sequence != Some(seq.0) || app.ui.export.file_name.is_empty() {
+@@ -177,7 +197,8 @@ fn sync_sequence(app: &mut FilmcraftApp) {
+         app.ui.export.for_sequence = Some(seq.0);
+     }
+     if app.ui.export.location.is_empty() {
+-        app.ui.export.location = filmcraft_engine::export_tools::default_export_dir(&app.session).to_string_lossy().to_string();
++        // Jarvis: l'ultima cartella scelta (se c'è ancora), altrimenti quella del progetto
++        app.ui.export.location = remembered_dir().unwrap_or_else(|| filmcraft_engine::export_tools::default_export_dir(&app.session).to_string_lossy().to_string());
+     }
+     // As Premiere does: a sequence with In/Out marks exports that range unless another is chosen.
+     // Only when the sequence or its marks change, so a Range picked by hand (or `ui.set`) stays.
+diff --git a/crates/ui-egui/src/panels/export_mode/settings.rs b/crates/ui-egui/src/panels/export_mode/settings.rs
+index 9c8388d..63e72f1 100644
+--- a/crates/ui-egui/src/panels/export_mode/settings.rs
++++ b/crates/ui-egui/src/panels/export_mode/settings.rs
+@@ -273,6 +273,7 @@ pub(super) fn settings_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: R
+                 reg.add("export.location.browse", r.rect, "Choose folder");
+                 pick_folder = r.clicked();
+                 if let Some(v) = draft_text(ui, &mut reg, "export.location", &ex.location, tl!("Folder")) {
++                    super::remember_dir(&v);
+                     ex.location = v;
+                 }
+             });
+@@ -422,6 +423,7 @@ pub(super) fn settings_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: R
+     if pick_folder && !busy {
+         app.pick_ui(FileDialog::Folder { at: None }, |app, paths| {
+             if let Some(d) = paths.into_iter().next() {
++                super::remember_dir(&d);
+                 app.ui.export.location = d;
+             }
+         });
 diff --git a/crates/ui-egui/src/panels/import_mode.rs b/crates/ui-egui/src/panels/import_mode.rs
 index 4ec9555..26bdaf5 100644
 --- a/crates/ui-egui/src/panels/import_mode.rs
