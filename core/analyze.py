@@ -302,7 +302,10 @@ def analyze(path, info, layout, opts, progress, log, stop=lambda: False):
     signal = smooth(np.maximum(z, 0) + 0.4 * np.maximum(contrast, 0) + 0.3 * np.maximum(Mz, 0), 3)
 
     # 2) candidati = picchi
+    use_gem = bool((opts.get("gemini_key") or "").strip())
     n_cand = int(min(70, max(12, max_clips * 2.5, dur / 60 * 0.5)))
+    if use_gem:  # Gemini sceglie tra più momenti
+        n_cand = int(min(110, max(n_cand, max_clips * 4, dur / 60 * 0.8)))
     s = signal.copy(); s[:5] = 0
     cands = []
     while len(cands) < n_cand:
@@ -359,7 +362,10 @@ def analyze(path, info, layout, opts, progress, log, stop=lambda: False):
         if en - st > max_len:
             st = en - max_len
         st, en = max(0.0, st), min(dur, en)
-        clips.append(score_clip(len(clips) + 1, p, st, en, segs, L, z, contrast, Mz, n, bool(tr)))
+        cl = score_clip(len(clips) + 1, p, st, en, segs, L, z, contrast, Mz, n, bool(tr))
+        cl["_win"] = (ws, we)
+        cl["_wwords"] = [w for sg in segs for w in sg["words"]]
+        clips.append(cl)
 
     # 4) togli i doppioni e ordina
     clips.sort(key=lambda c: -c["score"])
@@ -367,9 +373,20 @@ def analyze(path, info, layout, opts, progress, log, stop=lambda: False):
     for c in clips:
         if all(min(c["end"], o["end"]) - max(c["start"], o["start"]) < 0.4 * (c["end"] - c["start"]) for o in kept):
             kept.append(c)
-    kept = kept[:max_clips]
+    if use_gem:
+        progress(0.92, "Gemini sceglie i momenti migliori…")
+        try:
+            from . import ai_clips
+            kept = ai_clips.pick(kept, opts, max_clips, min_len, max_len, dur, log)
+        except Exception as e:
+            log(f"Gemini non disponibile ({str(e)[:160]}): uso la scelta automatica")
+            kept = kept[:max_clips]
+    else:
+        kept = kept[:max_clips]
+    for c in kept:
+        c.pop("_win", None); c.pop("_wwords", None)
 
-    if opts.get("api_key"):
+    if opts.get("api_key") and not use_gem:
         progress(0.92, "Chiedo un parere all'AI…")
         try:
             ai_rerank(kept, opts["api_key"], opts.get("ai_model", "claude-sonnet-5-5"), log)

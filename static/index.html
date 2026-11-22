@@ -282,6 +282,12 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
             <button onclick="saveLayout(true)" id="relayBtn" class="hidden">Applica layout alle anteprime</button>
           </div>
         </div>
+        <div class="ai" id="clipAi" style="margin:12px 0">
+          <div style="font-weight:700;margin-bottom:6px">✨ Che clip cerchi? <span class="hint" style="font-weight:400">(con Gemini: sceglie lui i momenti migliori, sistema inizio e fine e scrive titolo e hook)</span></div>
+          <div class="airow"><textarea id="aiPromptC" rows="2" placeholder="Lascia vuoto per i momenti più virali, oppure: &quot;i momenti in cui mi spavento e urlo&quot;, &quot;solo le parti divertenti con la chat&quot;, &quot;le morti più assurde&quot;"></textarea>
+            <button id="micBtnC" class="mic" onclick="micToggle('C')" title="Parla e scrivo io">🎤</button></div>
+          <div class="hint" id="micMsgC"></div>
+        </div>
         <div class="opts" id="opts">
           <label>Quante clip <input type="number" id="oN" min="3" max="50" value="15" style="width:90px"></label>
           <label>Precisione parlato
@@ -404,7 +410,7 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
 
 <div class="modal" id="cfg"><div class="box">
   <h3 style="margin:0 0 6px">Impostazioni</h3>
-  <div style="color:var(--mut);font-size:13px">Facoltativo: con una chiave API di Claude le clip vengono rivalutate anche da un'AI che legge cosa dici (titolo e testo hook inclusi). Senza chiave funziona tutto lo stesso, in locale.</div>
+  <div style="color:var(--mut);font-size:13px">Tutto facoltativo. Con la chiave <b>Gemini</b> (gratis) Gemini sceglie le clip virali e monta a parole nell'editor. La chiave Claude serve solo se vuoi Claude al posto di Gemini per valutare le clip. Senza chiavi funziona tutto lo stesso, in locale.</div>
   <label>Chiave API Anthropic <input type="password" id="cKey" placeholder="sk-ant-… (lascia vuoto per non cambiarla)"></label>
   <label>Modello AI <input type="text" id="cModel"></label>
   <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
@@ -684,7 +690,7 @@ async function saveLayout(rerender){
 /* ---------- analisi clip ---------- */
 async function startAnalyze(){
   await saveLayout();
-  await api(`/api/project/${PID}/analyze`,{max_clips:+$('#oN').value,model:$('#oModel').value,max_len:+$('#oMax').value,min_len:+$('#oMin').value,censor:$('#oCensor').checked});
+  await api(`/api/project/${PID}/analyze`,{max_clips:+$('#oN').value,model:$('#oModel').value,max_len:+$('#oMax').value,min_len:+$('#oMin').value,censor:$('#oCensor').checked,clip_prompt:$('#aiPromptC').value.trim()});
   $('#done').style.display='none';
 }
 
@@ -836,7 +842,7 @@ async function micToggle(sfx=''){if(!micRec)micSfx=sfx;sfx=micSfx;const b=$('#mi
     micFallback=true;micRec=true;b.classList.add('rec');m.textContent='🔴 Ti ascolto ('+r.device+')… ripremi 🎤 quando hai finito.'}}
 function micDone(r){const m=$('#micMsg'+micSfx);if(r.error){m.textContent='⚠ '+r.error;return}
   const t=(r.text||'').trim();if(!t){m.textContent='Non ho sentito niente, riprova.';return}
-  const a=$('#aiPrompt'+micSfx);a.value=(a.value.trim()?a.value.trim()+' ':'')+t;m.textContent=micSfx?'✅ Fatto: controlla il testo e premi "Analizza e apri l\'editor".':'✅ Fatto: controlla il testo e premi "Monta come ho detto".'}
+  const a=$('#aiPrompt'+micSfx);a.value=(a.value.trim()?a.value.trim()+' ':'')+t;m.textContent=micSfx==='C'?'✅ Fatto: controlla il testo e premi "Trova le clip virali".':micSfx?'✅ Fatto: controlla il testo e premi "Analizza e apri l\'editor".':'✅ Fatto: controlla il testo e premi "Monta come ho detto".'}
 
 /* ---------- 4b: EDITOR ---------- */
 let ED=null, edrag=null, hist=[], redo=[], saveT=null, raf=null, montato=true, sel=null;
