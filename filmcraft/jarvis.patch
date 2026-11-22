@@ -209,10 +209,10 @@ index 44399e4..f4606e8 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..d43ea01
+index 0000000..d44e792
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,1760 @@
+@@ -0,0 +1,1766 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -1084,6 +1084,12 @@ index 0000000..d43ea01
 +            composer,
 +        ),
 +        spec("jarvis.placeTitle", "Jarvis: Titolo TikTok", r#"{"path":str,"time":ticks?,"seconds":f=3 (video: tutta la sua durata se manca),"track":str?}"#, place_title),
++        spec("jarvis.placeSfx", "Jarvis: Suono", r#"{"path":str,"time":ticks?,"gain":db?}"#, |s, p| {
++            let path = str_p(p, "path").ok_or_else(|| bad("jarvis.placeSfx", "manca il file"))?.to_string();
++            let t = p["time"].as_i64().map(Tick).unwrap_or_else(|| s.playhead());
++            let n = place_sfx(s, vec![(std::path::PathBuf::from(path), t)], f64_p(p, "gain").unwrap_or(0.0))?;
++            Ok(json!({"sfx": n}))
++        }),
 +        spec("jarvis.composerItem", "Jarvis: Transizione Premiere Composer", r#"{"path":str,"time":ticks?,"scope":"playhead|selection|all"?,"sfx":bool?,"sfxGain":f?}"#, mh_apply),
 +        spec("jarvis.clipFx", "Jarvis: Effetto clip", r#"{"preset":"punch|zoom_in|zoom_out|shake","amount":f?}"#, clip_fx),
 +    ]
@@ -2228,10 +2234,10 @@ index fd5f66c..fc6ef4d 100644
  	Add Guide…	Aggiungi guida…
 diff --git a/crates/ui-egui/src/jarvis_assist.rs b/crates/ui-egui/src/jarvis_assist.rs
 new file mode 100644
-index 0000000..051deb1
+index 0000000..13aeb0e
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_assist.rs
-@@ -0,0 +1,369 @@
+@@ -0,0 +1,577 @@
 +//! Jarvis Composer › Gemini: dici (o scrivi) cosa vuoi cambiare nella timeline e Gemini lo fa con i
 +//! comandi di FilmCraft (tagli, zoom, scossoni, transizioni, titoli, sottotitoli, volume, marcatori).
 +//! La richiesta a Gemini e il microfono passano da Jarvis Clipper (`--fc-assist`, `--listen`), che ha
@@ -2255,6 +2261,90 @@ index 0000000..051deb1
 +    titles: Option<Job>,
 +    msg: String,
 +    history: Vec<String>,
++    folders: Vec<String>,
++    folders_loaded: bool,
++    transcribing: Option<std::thread::JoinHandle<Result<Vec<(filmcraft_project::ItemId, filmcraft_project::Transcript)>, String>>>,
++    pub(crate) pick_folder: bool,
++}
++
++fn folders_file() -> Option<std::path::PathBuf> {
++    let base = std::env::var_os("APPDATA").or_else(|| std::env::var_os("HOME")).map(std::path::PathBuf::from)?;
++    Some(base.join("FilmCraft").join("jarvis_media_folders.json"))
++}
++
++impl Assist {
++    fn load_folders(&mut self) {
++        self.folders_loaded = true;
++        if let Some(v) = folders_file().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str::<Vec<String>>(&t).ok()) {
++            self.folders = v;
++        }
++    }
++    fn save_folders(&self) {
++        if let Some(f) = folders_file() {
++            let _ = std::fs::create_dir_all(f.parent().unwrap_or(std::path::Path::new(".")));
++            let _ = std::fs::write(f, serde_json::to_string(&self.folders).unwrap_or_default());
++        }
++    }
++}
++
++/// Dopo "Aggiungi cartella…".
++pub(crate) fn add_folder(a: &mut Assist, d: String) {
++    if !a.folders.contains(&d) {
++        a.folders.push(d);
++        a.save_folders();
++    }
++}
++
++const SOUND_EXT: &[&str] = &["mp3", "wav", "ogg", "m4a", "aac", "flac"];
++const IMAGE_EXT: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "mp4", "mov", "webm"];
++
++/// I file (suoni o immagini) nelle cartelle scelte, fino a 5 livelli e 3000 file.
++fn media_files(folders: &[String], exts: &[&str]) -> Vec<std::path::PathBuf> {
++    let mut out = Vec::new();
++    let mut stack: Vec<(std::path::PathBuf, usize)> = folders.iter().map(|f| (std::path::PathBuf::from(f), 0)).collect();
++    while let Some((d, depth)) = stack.pop() {
++        let Ok(rd) = std::fs::read_dir(&d) else { continue };
++        for e in rd.flatten() {
++            let p = e.path();
++            if p.is_dir() {
++                if depth < 5 {
++                    stack.push((p, depth + 1));
++                }
++            } else if p.extension().and_then(|x| x.to_str()).is_some_and(|x| exts.contains(&x.to_lowercase().as_str())) {
++                out.push(p);
++                if out.len() >= 3000 {
++                    return out;
++                }
++            }
++        }
++    }
++    out
++}
++
++fn norm(s: &str) -> String {
++    s.to_lowercase().chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")
++}
++
++/// Il file il cui nome somiglia di più a `q` (tutte le parole dentro, se no il più parole in comune).
++fn find_file(files: &[std::path::PathBuf], q: &str) -> Option<std::path::PathBuf> {
++    let q = norm(q);
++    let words: Vec<&str> = q.split_whitespace().collect();
++    if words.is_empty() {
++        return None;
++    }
++    let mut best: Option<(usize, usize, &std::path::PathBuf)> = None;
++    for f in files {
++        let n = norm(&f.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_default());
++        let hits = words.iter().filter(|w| n.contains(*w)).count();
++        if hits == 0 {
++            continue;
++        }
++        let key = (hits, usize::MAX - n.len());
++        if best.as_ref().is_none_or(|b| key > (b.0, b.1)) {
++            best = Some((key.0, key.1, f));
++        }
++    }
++    best.filter(|b| b.0 * 2 >= words.len()).map(|b| b.2.clone())
 +}
 +
 +fn spawn(args: Vec<std::ffi::OsString>, out: std::path::PathBuf) -> Job {
@@ -2315,14 +2405,34 @@ index 0000000..051deb1
 +            }
 +        }
 +    });
-+    let busy = a.job.is_some();
++    if !a.folders_loaded {
++        a.load_folders();
++    }
++    ui.horizontal_wrapped(|ui| {
++        ui.small("Cartelle dei tuoi suoni e meme:");
++        let mut rm = None;
++        for (i, f) in a.folders.iter().enumerate() {
++            let name = std::path::Path::new(f).file_name().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| f.clone());
++            if ui.small_button(format!("📁 {name} ✕")).on_hover_text(format!("{f}\n(clic per toglierla)")).clicked() {
++                rm = Some(i);
++            }
++        }
++        if let Some(i) = rm {
++            a.folders.remove(i);
++            a.save_folders();
++        }
++        if ui.small_button("➕ Aggiungi cartella…").on_hover_text("Es. E:\\Pack EDITING: Gemini potrà mettere i tuoi SFX (vine boom…) e le tue immagini/meme").clicked() {
++            a.pick_folder = true;
++        }
++    });
++    let busy = a.job.is_some() || a.transcribing.is_some();
 +    if ui
-+        .add_enabled(!busy && !a.prompt.trim().is_empty(), egui::Button::new(if busy { "⏳ Gemini sta lavorando…" } else { "✨ Fallo" }).min_size(egui::vec2(ui.available_width(), 30.0)))
++        .add_enabled(!busy && !a.prompt.trim().is_empty(), egui::Button::new(if a.transcribing.is_some() { "⏳ Prima trascrivo cosa dici (una volta sola)…" } else if busy { "⏳ Gemini sta lavorando…" } else { "✨ Fallo" }).min_size(egui::vec2(ui.available_width(), 30.0)))
 +        .clicked()
 +    {
 +        a.want_send = true;
 +    }
-+    if busy || a.listen.is_some() || a.titles.is_some() {
++    if busy || a.listen.is_some() || a.titles.is_some() || a.transcribing.is_some() {
 +        ctx.request_repaint_after(std::time::Duration::from_millis(250));
 +    }
 +    if !a.msg.is_empty() {
@@ -2357,7 +2467,9 @@ index 0000000..051deb1
 +        .iter()
 +        .map(|w| json!({"w": w.text, "s": secs(w.start), "e": secs(w.end)}))
 +        .collect();
-+    Some(json!({"name": "", "duration": secs(q.duration()), "width": q.settings.width, "height": q.settings.height,
++    let snd: Vec<String> = media_files(&app.jarvis_ui.assist.folders, SOUND_EXT).iter().filter_map(|p| p.file_stem().map(|x| x.to_string_lossy().to_string())).take(600).collect();
++    let img: Vec<String> = media_files(&app.jarvis_ui.assist.folders, IMAGE_EXT).iter().filter_map(|p| p.file_stem().map(|x| x.to_string_lossy().to_string())).take(600).collect();
++    Some(json!({"sounds": snd, "images": img, "name": "", "duration": secs(q.duration()), "width": q.settings.width, "height": q.settings.height,
 +                "playhead": secs(app.session.playhead()), "tracks": tracks, "markers": markers, "words": words}))
 +}
 +
@@ -2379,8 +2491,37 @@ index 0000000..051deb1
 +            Err(e) => app.jarvis_ui.assist.msg = format!("⚠ {e}"),
 +        }
 +    }
-+    if app.jarvis_ui.assist.want_send {
++    if let Some(h) = app.jarvis_ui.assist.transcribing.take() {
++        if h.is_finished() {
++            match h.join().unwrap_or_else(|_| Err("trascrizione interrotta".into())) {
++                Ok(done) => {
++                    let _ = filmcraft_engine::jarvis::apply_transcripts(&mut app.session, done);
++                    app.jarvis_ui.assist.want_send = true;
++                }
++                Err(e) => {
++                    app.jarvis_ui.assist.msg = format!("⚠ Trascrizione: {e} (mando lo stesso, ma i tagli sulle parole saranno meno precisi)");
++                    app.jarvis_ui.assist.want_send = true;
++                }
++            }
++        } else {
++            app.jarvis_ui.assist.transcribing = Some(h);
++        }
++    }
++    if app.jarvis_ui.assist.want_send && app.jarvis_ui.assist.transcribing.is_none() && filmcraft_engine::transcript::sequence_words(&app.session).is_empty() && !app.jarvis_ui.assist.msg.starts_with("⚠ Trascrizione") {
 +        app.jarvis_ui.assist.want_send = false;
++        match filmcraft_engine::jarvis::prepare_captions(&app.session, &json!({})) {
++            Ok(Some(job)) => {
++                app.jarvis_ui.assist.transcribing = Some(std::thread::spawn(move || filmcraft_engine::jarvis::run_captions(job, &|_, _| {})));
++                app.jarvis_ui.assist.msg = "⏳ Prima trascrivo cosa dici, così Gemini taglia preciso sulle parole…".into();
++            }
++            _ => app.jarvis_ui.assist.want_send = true,
++        }
++    }
++    if app.jarvis_ui.assist.want_send && app.jarvis_ui.assist.transcribing.is_none() {
++        app.jarvis_ui.assist.want_send = false;
++        if app.jarvis_ui.assist.msg.starts_with("⚠ Trascrizione") || app.jarvis_ui.assist.msg.starts_with("⏳ Prima") {
++            app.jarvis_ui.assist.msg.clear();
++        }
 +        match context(app) {
 +            Some(c) => {
 +                let jp = tmp("assist-job");
@@ -2466,6 +2607,7 @@ index 0000000..051deb1
 +        Some(t - d)
 +    };
 +    let mut n = 0;
++    let mut missing: Vec<String> = Vec::new();
 +    let mut cap_ranges: Vec<[i64; 2]> = Vec::new();
 +    let mut cap_style: Option<(String, String)> = None;
 +    let mut titles: Vec<Value> = Vec::new();
@@ -2474,6 +2616,73 @@ index 0000000..051deb1
 +        let start = f(o, "start").and_then(&shift);
 +        let end = f(o, "end").and_then(|e| shift(e - 0.001).map(|x| x + 0.001));
 +        let time = f(o, "time").and_then(&shift).or(start);
++        // zoom/bianco e nero senza fine: 1,5 s da dove inizia
++        let (start, end) = match (start, end, time) {
++            (Some(a), None, _) if matches!(op, "zoom" | "shake" | "bw") => (Some(a), Some(a + f(o, "seconds").unwrap_or(1.5))),
++            (None, None, Some(t)) if matches!(op, "zoom" | "shake" | "bw") => (Some(t), Some(t + f(o, "seconds").unwrap_or(1.5))),
++            x => (x.0, x.1),
++        };
++        match op {
++            "bw" => {
++                let (Some(a), Some(b)) = (start, end) else { continue };
++                let (ta, tb) = (snap(a), snap(b));
++                if tb <= ta {
++                    continue;
++                }
++                let _ = app.session.execute("sequence.addEditAllTracks", json!({"time": ta.0}));
++                let _ = app.session.execute("sequence.addEditAllTracks", json!({"time": tb.0}));
++                let ids: Vec<u64> = app
++                    .session
++                    .active_sequence()
++                    .map(|q| {
++                        q.video_tracks
++                            .iter()
++                            .filter(|t| t.name != filmcraft_engine::jarvis::CAPTION_TRACK && t.name != filmcraft_engine::jarvis::TITLE_TRACK && t.name != "Meme Jarvis")
++                            .flat_map(|t| t.items.iter())
++                            .filter(|it| it.start >= ta && it.end() <= tb)
++                            .map(|it| it.id.0)
++                            .collect()
++                    })
++                    .unwrap_or_default();
++                if !ids.is_empty() && app.session.execute("effects.apply", json!({"clips": ids, "effect": "black_white"})).is_ok() {
++                    n += 1;
++                }
++                continue;
++            }
++            "sfx" => {
++                let Some(t) = time else { continue };
++                let files = media_files(&app.jarvis_ui.assist.folders, SOUND_EXT);
++                let q = o["name"].as_str().or(o["text"].as_str()).unwrap_or("");
++                match find_file(&files, q) {
++                    Some(fp) => {
++                        if crate::menus::invoke(app, ctx, "jarvis.placeSfx", json!({"path": fp.to_string_lossy(), "time": snap(t).0, "gain": f(o, "db").unwrap_or(0.0)})).is_ok() {
++                            n += 1;
++                        }
++                    }
++                    None => missing.push(format!("suono \"{q}\"")),
++                }
++                continue;
++            }
++            "image" => {
++                let Some(t) = time else { continue };
++                let files = media_files(&app.jarvis_ui.assist.folders, IMAGE_EXT);
++                let q = o["name"].as_str().or(o["text"].as_str()).unwrap_or("");
++                let secs = match (start, end) {
++                    (Some(a), Some(b)) if b > a => b - a,
++                    _ => f(o, "seconds").unwrap_or(2.0),
++                };
++                match find_file(&files, q) {
++                    Some(fp) => {
++                        if crate::menus::invoke(app, ctx, "jarvis.placeTitle", json!({"path": fp.to_string_lossy(), "time": snap(t).0, "seconds": secs, "track": "Meme Jarvis"})).is_ok() {
++                            n += 1;
++                        }
++                    }
++                    None => missing.push(format!("immagine \"{q}\"")),
++                }
++                continue;
++            }
++            _ => {}
++        }
 +        match op {
 +            "zoom" | "shake" => {
 +                let (Some(a), Some(b)) = (start, end) else { continue };
@@ -2599,7 +2808,12 @@ index 0000000..051deb1
 +        app.jarvis_ui.assist.titles = Some(job);
 +        n += titles.len();
 +    }
-+    format!("{n_cut} tagli · {n} modifiche")
++    let miss = if missing.is_empty() {
++        String::new()
++    } else {
++        format!(" · non trovati nelle tue cartelle: {}", missing.join(", "))
++    };
++    format!("{n_cut} tagli · {n} modifiche{miss}")
 +}
 diff --git a/crates/ui-egui/src/jarvis_social.rs b/crates/ui-egui/src/jarvis_social.rs
 new file mode 100644
@@ -3217,10 +3431,10 @@ index 0000000..9c8196e
 +}
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..99faea2
+index 0000000..45c00b6
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
-@@ -0,0 +1,985 @@
+@@ -0,0 +1,993 @@
 +//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
 +
 +use serde_json::{Value, json};
@@ -3595,6 +3809,14 @@ index 0000000..99faea2
 +                run = None;
 +            }
 +        }
++    }
++    if app.jarvis_ui.assist.pick_folder {
++        app.jarvis_ui.assist.pick_folder = false;
++        app.pick_ui(crate::native_dialogs::FileDialog::Folder { at: None }, |app, paths| {
++            if let Some(d) = paths.into_iter().next() {
++                crate::jarvis_assist::add_folder(&mut app.jarvis_ui.assist, d);
++            }
++        });
 +    }
 +    if pick_avatar {
 +        let files = app.hooks.pick_files.as_mut().map(|f| f(&["png", "jpg", "jpeg", "webp"])).unwrap_or_default();

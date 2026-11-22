@@ -27,6 +27,12 @@ fare, in ordine, usando SOLO questi tipi ("op"):
   minimal; "anim": pop_osc, pop, pop_su, rimbalzo, scivola, tremolio, zoom, nessuna).
 - "volume": cambia il volume delle clip audio in [start, end] di "db" decibel (+ alza, - abbassa).
 - "marker": marcatore a "time" con "name".
+- "sfx": suono a "time"; "name" = il nome (esatto o quasi) di uno dei SUONI DISPONIBILI (es. vine boom); "db" volume.
+- "image": immagine/meme sopra al video da "start" a "end" (o a "time" per "seconds"); "name" = una delle
+  IMMAGINI DISPONIBILI.
+- "bw": bianco e nero sulla clip video in [start, end].
+Per un flash bianco tra due pezzi usa "transition" con preset "flash".
+Una richiesta lunga va spezzata in tante operazioni, una per ogni cosa chiesta, nell'ordine giusto.
 Tempi in secondi della SEQUENZA (quelli della timeline che ricevi). Per tagliare sulle parole usa i tempi della
 trascrizione (inizia ~0.08 s prima della parola, finisci ~0.12 s dopo). Se la richiesta parla di "qui" o
 "adesso", usa l'indicatore. Se qualcosa non si può fare con queste operazioni, non inventare: dillo nella nota.
@@ -61,6 +67,12 @@ def _context_text(ctx):
         lines.append(f"{tr['name']} ({tr['kind']}): {items or '(vuota)'}")
     if ctx.get("markers"):
         lines.append("Marcatori: " + ", ".join(f"{m['time']:.2f} {m.get('name', '')}" for m in ctx["markers"]))
+    if ctx.get("sounds"):
+        lines.append("SUONI DISPONIBILI: " + " | ".join(ctx["sounds"][:600]))
+    else:
+        lines.append("(Nessuna cartella di suoni scelta: per i suoni dì di aggiungerla nella scheda Gemini.)")
+    if ctx.get("images"):
+        lines.append("IMMAGINI DISPONIBILI: " + " | ".join(ctx["images"][:600]))
     words = ctx.get("words") or []
     if words:
         lines.append("TRASCRIZIONE (inizio di ogni parola in secondi della sequenza; dopo | la fine dell'ultima):")
