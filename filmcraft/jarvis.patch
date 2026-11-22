@@ -5078,10 +5078,10 @@ index 7eb176f..a6f69c8 100644
                      let moves: Vec<Value> = clips
                          .iter()
 diff --git a/crates/ui-egui/src/panels/transform_handles.rs b/crates/ui-egui/src/panels/transform_handles.rs
-index a06589d..ba0b73d 100644
+index a06589d..a3c8751 100644
 --- a/crates/ui-egui/src/panels/transform_handles.rs
 +++ b/crates/ui-egui/src/panels/transform_handles.rs
-@@ -616,6 +616,214 @@ pub fn monitor_overlay(app: &mut FilmcraftApp, ui: &mut egui::Ui, pic: Rect, fra
+@@ -616,6 +616,220 @@ pub fn monitor_overlay(app: &mut FilmcraftApp, ui: &mut egui::Ui, pic: Rect, fra
      crate::panels::effect_controls::run(app, ui.ctx(), actions);
  }
  
@@ -5116,10 +5116,16 @@ index a06589d..ba0b73d 100644
 +    let clip = it.id;
 +    let mut actions: Vec<(String, Value)> = Vec::new();
 +    if mode == 1 {
-+        // Trasforma: Motion selezionato sulla clip, così compaiono le maniglie
++        // Trasforma: Motion selezionato sulla clip, così compaiono le maniglie. Mai togliere la
++        // selezione a chi ha scelto altro (un suono, un'altra clip): solo se è vuota o è già questa.
++        let sel = &app.session.state.selection;
++        if !sel.is_empty() && !sel.contains(&clip) {
++            return;
++        }
 +        let ok = selected_effect(app).is_some_and(|s| s.0.0 == clip && (s.3.id == "motion" || s.3.id == "transform"));
-+        if !ok {
-+            if !app.session.state.selection.contains(&clip) {
++        let other_effect = app.session.state.selected_effect.as_ref().is_some_and(|e| e.clip == clip);
++        if !ok && !other_effect {
++            if sel.is_empty() {
 +                actions.push(("timeline.select".into(), json!({"clips": [clip.0]})));
 +            }
 +            actions.push(("effects.select".into(), json!({"clip": clip.0, "effect": "motion"})));
