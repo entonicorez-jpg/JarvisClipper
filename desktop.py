@@ -44,6 +44,22 @@ if __name__ == "__main__":
                 pass
             ok = False
         os._exit(0 if ok else 1)
+    for flag in ("--fc-assist", "--listen"):
+        if flag in sys.argv:
+            # chiamato da FilmCraft Jarvis: Gemini sulla timeline / microfono
+            i = sys.argv.index(flag)
+            try:
+                from core import fc_assist
+                ok = (fc_assist.run_assist if flag == "--fc-assist" else fc_assist.run_listen)(sys.argv[i + 1], sys.argv[i + 2])
+            except Exception:
+                traceback.print_exc()
+                try:
+                    import json as _j
+                    _j.dump({"error": traceback.format_exc()[-400:]}, open(sys.argv[i + 2], "w", encoding="utf-8"))
+                except Exception:
+                    pass
+                ok = True
+            os._exit(0 if ok else 1)
     for flag in ("--tiktok-title", "--emoji-setup"):
         if flag in sys.argv:
             # chiamato da FilmCraft Jarvis per i Titoli TikTok: niente finestra
