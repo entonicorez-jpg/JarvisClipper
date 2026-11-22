@@ -32,7 +32,9 @@ fare, in ordine, usando SOLO questi tipi ("op"):
   IMMAGINI DISPONIBILI.
 - "bw": bianco e nero sulla clip video in [start, end].
 Per un flash bianco tra due pezzi usa "transition" con preset "flash".
-Una richiesta lunga va spezzata in tante operazioni, una per ogni cosa chiesta, nell'ordine giusto.
+Una richiesta lunga va spezzata in tante operazioni, una per ogni cosa chiesta, nell'ordine giusto, ma SENZA
+ripetere operazioni uguali: di solito bastano poche operazioni (raramente più di 30). Non riscrivere la
+timeline e non elencare cose già presenti.
 Tempi in secondi della SEQUENZA (quelli della timeline che ricevi). Per tagliare sulle parole usa i tempi della
 trascrizione (inizia ~0.08 s prima della parola, finisci ~0.12 s dopo). Se la richiesta parla di "qui" o
 "adesso", usa l'indicatore. Se qualcosa non si può fare con queste operazioni, non inventare: dillo nella nota.
@@ -92,14 +94,21 @@ def run_assist(job_path, out):
     text = f"RICHIESTA DI MRJAKE:\n{job['prompt'].strip()}\n\nTIMELINE:\n{_context_text(job.get('context') or {})}"
     body = {"system_instruction": {"parts": [{"text": SYSTEM}]},
             "contents": [{"role": "user", "parts": [{"text": text}]}],
-            "generationConfig": {"responseMimeType": "application/json", "responseSchema": SCHEMA, "temperature": 0.2}}
+            "generationConfig": {"responseMimeType": "application/json", "responseSchema": SCHEMA, "temperature": 0.2, "maxOutputTokens": 16384}}
     last = None
     for m in ([c.get("gemini_model")] if c.get("gemini_model") else []) + ai_edit.best_models(key)[:6]:
         try:
             raw, _ = ai_edit._req(f"{ai_edit.API}/v1beta/models/{m}:generateContent", key, json.dumps(body).encode(),
                                   {"Content-Type": "application/json"}, "POST", timeout=600)
             d = json.loads(raw)
-            res = json.loads("".join(p.get("text", "") for p in d["candidates"][0]["content"]["parts"]))
+            res = ai_edit.loose_json("".join(p.get("text", "") for p in d["candidates"][0]["content"]["parts"]))
+            # niente doppioni e al massimo 80 operazioni (a volte Gemini si ripete)
+            seen, ops = set(), []
+            for o in res.get("ops", []):
+                k = json.dumps(o, sort_keys=True)
+                if k not in seen:
+                    seen.add(k); ops.append(o)
+            res["ops"] = ops[:80]
             res["model"] = m
             with open(out, "w", encoding="utf-8") as fh:
                 json.dump(res, fh, ensure_ascii=False)

@@ -50,7 +50,7 @@ def pick(cands, opts, max_clips, min_len, max_len, dur, log=print):
             raw, _ = ai_edit._req(f"{ai_edit.API}/v1beta/models/{m}:generateContent", key, json.dumps(body).encode(),
                                   {"Content-Type": "application/json"}, "POST", timeout=600)
             d = json.loads(raw)
-            res = json.loads("".join(p.get("text", "") for p in d["candidates"][0]["content"]["parts"]))
+            res = ai_edit.loose_json("".join(p.get("text", "") for p in d["candidates"][0]["content"]["parts"]))
             log(f"Gemini ({m}) ha scelto {len(res.get('clips', []))} clip")
             break
         except RuntimeError as e:

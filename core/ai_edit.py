@@ -152,7 +152,7 @@ def plan(key, model, instructions, rs, re_, words, peaks, ed, video=None, log=pr
                           {"Content-Type": "application/json"}, "POST", timeout=600)
             d = json.loads(raw)
             txt = "".join(p.get("text", "") for p in d["candidates"][0]["content"]["parts"])
-            return json.loads(txt), m
+            return loose_json(txt), m
         except RuntimeError as e:
             last = e
             low = str(e).lower()
@@ -163,6 +163,42 @@ def plan(key, model, instructions, rs, re_, words, peaks, ed, video=None, log=pr
         except (KeyError, IndexError, json.JSONDecodeError) as e:
             last = RuntimeError(f"Gemini ha risposto in modo strano: {e}")
     raise last or RuntimeError("Gemini non risponde")
+
+
+def loose_json(txt):
+    """JSON di Gemini anche se tagliato a metà (risposta troppo lunga): tiene le parti complete."""
+    try:
+        return json.loads(txt)
+    except Exception:
+        pass
+    t = txt.strip()
+    # taglia all'ultimo oggetto completo e chiude le parentesi rimaste aperte
+    for cut in range(len(t), 0, -1):
+        if t[cut - 1] not in "}]":
+            continue
+        head = t[:cut]
+        stack, instr, esc = [], False, False
+        for ch in head:
+            if instr:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    instr = False
+            elif ch == '"':
+                instr = True
+            elif ch in "[{":
+                stack.append("]" if ch == "[" else "}")
+            elif ch in "]}" and stack:
+                stack.pop()
+        if instr:
+            continue
+        try:
+            return json.loads(head + "".join(reversed(stack)))
+        except Exception:
+            continue
+    raise RuntimeError("Gemini ha risposto in modo incompleto: riprova con una richiesta più corta")
 
 
 def clean(res, rs, re_):
