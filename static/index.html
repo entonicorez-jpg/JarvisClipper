@@ -313,6 +313,13 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
         </div>
         <div class="panel">
           <h4>Come lo voglio</h4>
+          <div class="ai" style="margin-bottom:12px">
+            <div style="font-weight:700;margin-bottom:6px">✨ Dimmi come vuoi il video <span class="hint" style="font-weight:400">(facoltativo, con Gemini)</span></div>
+            <div class="airow"><textarea id="aiPrompt0" rows="3" placeholder="Es. video lungo per YouTube: togli le pause lunghe, i caricamenti e quando leggo la chat, zoom solo quando urlo o muoio"></textarea>
+              <button id="micBtn0" class="mic" onclick="micToggle('0')" title="Parla e scrivo io">🎤</button></div>
+            <div class="hint" id="micMsg0">Se scrivi qui, dopo l'analisi Gemini monta subito come hai detto (un solo passaggio). Le scelte sotto restano la base.</div>
+            <label class="tog"><input type="checkbox" id="aiVideo0"> Fai guardare anche il video</label>
+          </div>
           <label class="field">Quanti tagli <select id="eRitmo"><option value="tranquillo">Pochi · solo le pause lunghe</option><option value="normale">Normali</option><option value="veloce" selected>Tanti · stile YouTube</option><option value="jumpcut">Tantissimi · jump cut a ogni respiro</option></select></label>
           <label class="field">Forza dello zoom <select id="eZoom"><option value="leggero">Leggero · 118%</option><option value="normale" selected>Normale · 132%</option><option value="forte">Forte · 150%</option></select></label>
           <label class="field">Quanti zoom <select id="eDens"><option value="pochi">Pochi · solo le reazioni forti</option><option value="normali">Normali · reazioni + qualche zoom a ritmo</option><option value="tanti" selected>Tanti · reazioni + zoom ogni 2 clip</option><option value="ogni_frase">Ogni frase · alterna zoom a ogni clip</option></select></label>
@@ -789,7 +796,8 @@ async function autoCamEdit(){const r=await api(`/api/project/${PID}/autocam`,{sp
   if(r.cam){CE.cam=r.cam;$('#eNoCam').checked=false;camDraw();camSave()}else alert('Non ho trovato la faccia: disegna il riquadro a mano.')}
 async function startEdit(){await camSave();
   const r=await api(`/api/project/${PID}/edit/analyze`,{ritmo:$('#eRitmo').value,zoom:$('#eZoom').value,densita:$('#eDens').value,nospam:$('#eNoSpam').checked,censor:$('#eCensor').checked,model:$('#eModel').value,
-    full_cam:$('#eFull').checked,blur:$('#eBlur').checked,out:$('#eOutBlur').checked?'blur':'netto'});
+    full_cam:$('#eFull').checked,blur:$('#eBlur').checked,out:$('#eOutBlur').checked?'blur':'netto',
+    ai_prompt:$('#aiPrompt0').value.trim(),ai_video:$('#aiVideo0').checked});
   if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else{ED=null;$('#jobbar').classList.remove('hidden')}}
 
 /* ---------- montaggio a parole (Gemini) ---------- */
@@ -809,7 +817,8 @@ async function aiGo(){const pr=$('#aiPrompt').value.trim();if(!pr){alert('Scrivi
   if(!(window.CFG||{}).gemini_key_set){openCfg();return}
   await edSave();const r=await api(`/api/project/${PID}/edit/ai`,{prompt:pr,video:$('#aiVideo').checked});
   if(r.error)return alert(r.error);if(!r.ok)alert('Aspetta che finisca il lavoro in corso');else{$('#jobbar').classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'})}}
-async function micToggle(){const b=$('#micBtn'),m=$('#micMsg');
+let micSfx='';
+async function micToggle(sfx=''){if(!micRec)micSfx=sfx;sfx=micSfx;const b=$('#micBtn'+sfx),m=$('#micMsg'+sfx);
   if(micRec){ // stop
     b.classList.remove('rec');m.textContent='Scrivo quello che hai detto…';
     if(micFallback){micRec=null;const r=await api('/api/voice/rec',{stop:true});micDone(r);return}
@@ -825,9 +834,9 @@ async function micToggle(){const b=$('#micBtn'),m=$('#micMsg');
     const r=await api('/api/voice/rec',{start:true});
     if(r.error){m.textContent='⚠ Microfono non disponibile: '+r.error;return}
     micFallback=true;micRec=true;b.classList.add('rec');m.textContent='🔴 Ti ascolto ('+r.device+')… ripremi 🎤 quando hai finito.'}}
-function micDone(r){const m=$('#micMsg');if(r.error){m.textContent='⚠ '+r.error;return}
+function micDone(r){const m=$('#micMsg'+micSfx);if(r.error){m.textContent='⚠ '+r.error;return}
   const t=(r.text||'').trim();if(!t){m.textContent='Non ho sentito niente, riprova.';return}
-  const a=$('#aiPrompt');a.value=(a.value.trim()?a.value.trim()+' ':'')+t;m.textContent='✅ Fatto: controlla il testo e premi "Monta come ho detto".'}
+  const a=$('#aiPrompt'+micSfx);a.value=(a.value.trim()?a.value.trim()+' ':'')+t;m.textContent=micSfx?'✅ Fatto: controlla il testo e premi "Analizza e apri l\'editor".':'✅ Fatto: controlla il testo e premi "Monta come ho detto".'}
 
 /* ---------- 4b: EDITOR ---------- */
 let ED=null, edrag=null, hist=[], redo=[], saveT=null, raf=null, montato=true, sel=null;

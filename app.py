@@ -356,6 +356,20 @@ def job_edit_analyze(pid, opts):
                                lambda f, m: set_job(pid, progress=f, msg=m),
                                lambda m: set_job(pid, log=m), lambda: stopped(pid))
     update(pid, edit=ed, status="editor")
+    prompt = (opts.get("ai_prompt") or "").strip()
+    if prompt:
+        if not (cfg().get("gemini_key") or "").strip():
+            set_job(pid, log="Per usare le istruzioni a parole metti la chiave Gemini in Impostazioni")
+        else:
+            set_job(pid, msg="Ora Gemini monta come hai detto…")
+            try:
+                job_edit_ai(pid, prompt, bool(opts.get("ai_video")))
+                return
+            except Exception as e:
+                if "Annullato" in str(e):
+                    raise
+                set_job(pid, log=f"Gemini: {e}", msg=f"Montaggio automatico pronto (Gemini non ha risposto: {str(e)[:120]})")
+                return
     set_job(pid, msg="Montaggio pronto: sistemalo nella timeline")
 
 
