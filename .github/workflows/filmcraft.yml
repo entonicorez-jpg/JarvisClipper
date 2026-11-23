@@ -58,10 +58,29 @@ jobs:
           rustup toolchain install stable --profile minimal --target x86_64-pc-windows-msvc
           dotnet tool install --global wix --version 5.0.2
 
+      - name: Cache della compilazione (le build dopo la prima ripartono da qui)
+        if: steps.have.outputs.skip != '1'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            fc/target
+          key: fcj-${{ runner.os }}-${{ hashFiles('fc/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            fcj-${{ runner.os }}-${{ hashFiles('fc/Cargo.lock') }}-
+            fcj-${{ runner.os }}-
+
       - name: Compila e impacchetta
         if: steps.have.outputs.skip != '1'
         shell: pwsh
         working-directory: fc
+        env:
+          # compilazione più veloce (niente LTO, più unità in parallelo): l'app va uguale
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_INCREMENTAL: "1"
         run: |
           $env:DIST = Join-Path $PWD 'dist'
           ./packaging/windows/package.ps1 -Arch x64
