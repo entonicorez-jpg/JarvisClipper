@@ -4,6 +4,11 @@ name: FilmCraft Jarvis
 # (filmcraft/jarvis.patch). Ricompilato ogni lunedì dall'ultima versione ufficiale.
 on:
   workflow_dispatch:
+    inputs:
+      warm:
+        description: "Solo riscalda la cache (compila senza pubblicare)"
+        type: boolean
+        default: false
   schedule:
     - cron: "17 3 * * 1"
   push:
@@ -49,7 +54,9 @@ jobs:
         id: have
         shell: bash
         run: |
-          if gh release view "${{ steps.up.outputs.tag }}" >/dev/null 2>&1; then echo "skip=1" >> $GITHUB_OUTPUT; fi
+          if gh release view "${{ steps.up.outputs.tag }}" >/dev/null 2>&1; then
+            if [ "${{ inputs.warm }}" = "true" ]; then echo "nopublish=1" >> $GITHUB_OUTPUT; else echo "skip=1" >> $GITHUB_OUTPUT; fi
+          fi
 
       - name: Strumenti
         if: steps.have.outputs.skip != '1'
@@ -96,7 +103,7 @@ jobs:
           Compress-Archive -Path (Join-Path $tmp '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'FilmCraft-Jarvis-portable.zip') -Force
 
       - name: Pubblica
-        if: steps.have.outputs.skip != '1'
+        if: steps.have.outputs.skip != '1' && steps.have.outputs.nopublish != '1'
         shell: bash
         run: |
           gh release create "${{ steps.up.outputs.tag }}" FilmCraft-Jarvis-portable.zip \
