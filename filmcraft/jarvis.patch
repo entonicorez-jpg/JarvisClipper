@@ -296,10 +296,10 @@ index 44399e4..f4606e8 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..2d63e81
+index 0000000..19e3e13
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,1826 @@
+@@ -0,0 +1,1930 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -778,6 +778,7 @@ index 0000000..2d63e81
 +    TransPreset { id: "light_leak", name: "Light leak", effect: "light_leak", frames: 14 },
 +    TransPreset { id: "vhs", name: "VHS", effect: "vhs_damage", frames: 8 },
 +    TransPreset { id: "dissolve", name: "Dissolvenza", effect: "cross_dissolve", frames: 10 },
++    TransPreset { id: "morph", name: "Morph Cut (nasconde il jump cut)", effect: "morph_cut", frames: 10 },
 +];
 +
 +const MIX: &[&str] = &["zoom_blur", "whip", "cross_zoom", "push", "flash"];
@@ -1178,6 +1179,7 @@ index 0000000..2d63e81
 +            Ok(json!({"sfx": n}))
 +        }),
 +        spec("jarvis.composerItem", "Jarvis: Transizione Premiere Composer", r#"{"path":str,"time":ticks?,"scope":"playhead|selection|all"?,"sfx":bool?,"sfxGain":f?}"#, mh_apply),
++        spec("jarvis.placeStems", "Jarvis: Voce e musica separate", r#"{"items":[{"clip":id,"voice":str,"music":str}]}"#, place_stems),
 +        spec("jarvis.clipFx", "Jarvis: Effetto clip", r#"{"preset":"punch|zoom_in|zoom_out|shake","amount":f?}"#, clip_fx),
 +    ]
 +}
@@ -2126,6 +2128,108 @@ index 0000000..2d63e81
 +    }
 +    out
 +}
++
++pub const VOICE_TRACK: &str = "Voce (Jarvis)";
++pub const MUSIC_TRACK: &str = "Musica (Jarvis)";
++
++/// Le clip audio scelte per la separazione: (clip, file, inizio nel file, durata, tutto in secondi).
++/// Contano le clip audio selezionate e l'audio collegato alle clip video selezionate.
++pub fn stem_targets(s: &Session) -> Vec<(u64, String, f64, f64)> {
++    let Some(q) = s.active_sequence() else { return Vec::new() };
++    let sel = &s.state.selection;
++    let links: std::collections::HashSet<u64> = q
++        .video_tracks
++        .iter()
++        .flat_map(|t| t.items.iter())
++        .filter(|it| sel.contains(&it.id))
++        .filter_map(|it| it.link)
++        .collect();
++    let mut out = Vec::new();
++    for tr in &q.audio_tracks {
++        if tr.name == VOICE_TRACK || tr.name == MUSIC_TRACK {
++            continue;
++        }
++        for it in &tr.items {
++            if !(sel.contains(&it.id) || it.link.is_some_and(|l| links.contains(&l))) || (it.speed - 1.0).abs() > 1e-6 || it.reverse {
++                continue;
++            }
++            let Some((_, m, _)) = s.project.resolve_media(it.item) else { continue };
++            let filmcraft_project::MediaRef::File { path } = &m.media else { continue };
++            out.push((it.id.0, path.clone(), it.source_in.seconds(), it.duration.seconds()));
++        }
++    }
++    out
++}
++
++/// Mette voce e musica separate su "Voce (Jarvis)" e "Musica (Jarvis)" al posto dell'audio
++/// originale (che viene spento, non cancellato). Torna gli id delle clip di voce e di musica.
++fn place_stems(s: &mut Session, p: &Value) -> Result<Value> {
++    let cmd = "jarvis.placeStems";
++    let list = p["items"].as_array().ok_or_else(|| bad(cmd, "manca items"))?.clone();
++    let seq_id = s.state.active_sequence.ok_or(EngineError::NoSequence)?;
++    let rate = s.sequence_rate();
++    let mut todo = Vec::new();
++    for v in &list {
++        let clip = ClipId(v["clip"].as_u64().ok_or_else(|| bad(cmd, "manca clip"))?);
++        let mut ids = Vec::new();
++        for k in ["voice", "music"] {
++            let path = v[k].as_str().ok_or_else(|| bad(cmd, "manca il file"))?.to_string();
++            let item = match media_with_path(s, &path) {
++                Some(i) => i,
++                None => {
++                    let r = s.execute("file.import", json!({"paths": [path.clone()]}))?;
++                    r["items"].as_array().and_then(|a| a.first()).and_then(Value::as_u64).map(filmcraft_project::ItemId).ok_or_else(|| bad(cmd, "non riesco a importare l'audio separato"))?
++                }
++            };
++            ids.push(item);
++        }
++        todo.push((clip, ids[0], ids[1]));
++    }
++    let (voices, musics) = s.edit("Separa voce e musica", |pr, _st| {
++        let q0 = pr.sequence(seq_id).ok_or(EngineError::NoSequence)?;
++        let spans: Vec<(ClipId, filmcraft_project::ItemId, filmcraft_project::ItemId, Tick, Tick)> =
++            todo.iter().filter_map(|(c, v, m)| q0.find_item(*c).map(|(_, it)| (*c, *v, *m, it.start, it.duration))).collect();
++        let mut made: Vec<(ClipId, filmcraft_project::TrackItem, filmcraft_project::TrackItem)> = Vec::new();
++        for (clip, vi, mi, start, dur) in spans {
++            let mut one = |item: filmcraft_project::ItemId, name: &str| -> Option<filmcraft_project::TrackItem> {
++                let len = match pr.item(item).map(|i| &i.kind) {
++                    Some(filmcraft_project::ItemKind::Media(m)) => m.duration(),
++                    _ => return None,
++                };
++                let mut ti = pr.make_track_item(item, TrackKind::Audio, start, TimeRange::new(Tick::ZERO, dur.min(len)), rate)?;
++                ti.name = name.to_string();
++                Some(ti)
++            };
++            let (Some(v), Some(m)) = (one(vi, "Voce"), one(mi, "Musica")) else { continue };
++            made.push((clip, v, m));
++        }
++        let (tv, tm) = (TrackId(pr.alloc_id()), TrackId(pr.alloc_id()));
++        let q = pr.sequence_mut(seq_id).ok_or(EngineError::NoSequence)?;
++        for (name, id) in [(VOICE_TRACK, tv), (MUSIC_TRACK, tm)] {
++            if !q.audio_tracks.iter().any(|t| t.name == name) {
++                q.audio_tracks.push(Track::new(id, TrackKind::Audio, name.to_string()));
++            }
++        }
++        let (mut vs, mut ms) = (Vec::new(), Vec::new());
++        for (clip, v, m) in made {
++            if let Some((_, it)) = q.find_item_mut(clip) {
++                it.enabled = false; // l'audio originale resta lì, spento
++            }
++            for (name, ti, out) in [(VOICE_TRACK, v, &mut vs), (MUSIC_TRACK, m, &mut ms)] {
++                let r = ti.range();
++                if let Some(t) = q.audio_tracks.iter_mut().find(|t| t.name == name) {
++                    t.items.retain(|i| !i.range().overlaps(&r));
++                    out.push(ti.id.0);
++                    t.items.push(ti);
++                    t.sort();
++                }
++            }
++        }
++        q.check().map_err(EngineError::Other)?;
++        Ok((vs, ms))
++    })?;
++    Ok(json!({"voice": voices, "music": musics}))
++}
 diff --git a/crates/engine/src/lib.rs b/crates/engine/src/lib.rs
 index cead3c7..3d04cce 100644
 --- a/crates/engine/src/lib.rs
@@ -2395,6 +2499,31 @@ index e1a7428..22aa228 100644
          if !self.ui.show_status_bar {
              return;
          }
+diff --git a/crates/ui-egui/src/app/keys.rs b/crates/ui-egui/src/app/keys.rs
+index 822223f..36d0fc6 100644
+--- a/crates/ui-egui/src/app/keys.rs
++++ b/crates/ui-egui/src/app/keys.rs
+@@ -161,6 +161,20 @@ impl FilmcraftApp {
+             // nothing, so a repeated Backspace cannot fall through to `edit.clear` and delete the
+             // timeline clip. A transition shown in the panel is the exception: `edit.clear` removes
+             // it, as it does from the Timeline, and Ripple Delete is consumed.
++            // Jarvis: nel pannello Testo, Canc / Backspace sulle parole selezionate le tagliano anche
++            // dal video (Estrai: il buco si chiude), come il montaggio dal testo di Premiere
++            if (self.ui.focused == PanelKind::Text || crate::panels::text::text_hot(ctx))
++                && matches!(id.as_str(), "edit.clear" | "edit.rippleDelete" | "textPanel.rippleDelete" | "textPanel.delete" | "project.delete")
++            {
++                let n = crate::panels::text::transcript_len(self);
++                if let Some((a, b)) = self.ui.transcript_sel.filter(|(a, b)| *a < n && *b < n) {
++                    self.ui.transcript_sel = None;
++                    if let Err(e) = menus::invoke(self, ctx, "transcript.extract", json!({"from": a.min(b), "to": a.max(b)})) {
++                        self.ui.status = e;
++                    }
++                }
++                continue;
++            }
+             if self.ui.focused == PanelKind::EffectControls && matches!(id.as_str(), "edit.clear" | "edit.rippleDelete") {
+                 // the clips the panel shows: the selected video clip and its linked audio clip, so a
+                 // selection on any row the panel displays is removable
 diff --git a/crates/ui-egui/src/i18n/it.tsv b/crates/ui-egui/src/i18n/it.tsv
 index fd5f66c..fc6ef4d 100644
 --- a/crates/ui-egui/src/i18n/it.tsv
@@ -2989,6 +3118,196 @@ index 0000000..13aeb0e
 +        format!(" · non trovati nelle tue cartelle: {}", missing.join(", "))
 +    };
 +    format!("{n_cut} tagli · {n} modifiche{miss}")
++}
+diff --git a/crates/ui-egui/src/jarvis_audio.rs b/crates/ui-egui/src/jarvis_audio.rs
+new file mode 100644
+index 0000000..013342b
+--- /dev/null
++++ b/crates/ui-egui/src/jarvis_audio.rs
+@@ -0,0 +1,184 @@
++//! Jarvis: musica sotto la voce.
++//! - "Abbassa la musica quando parlo": le clip selezionate diventano Musica con il ducking di
++//!   Essential Sound contro tutto il resto (la voce), e si generano i keyframe del volume.
++//! - "Separa voce e musica": per quando sono nella stessa traccia. Jarvis Clipper
++//!   (`--separa job out`, modello MDX scaricato la prima volta) divide l'audio delle clip in due
++//!   WAV; qui si mettono su "Voce (Jarvis)" e "Musica (Jarvis)", l'originale si spegne, e la musica
++//!   si abbassa sotto la voce.
++
++use std::sync::{Arc, Mutex};
++
++use serde_json::{Value, json};
++
++use crate::FilmcraftApp;
++
++type Res = Arc<Mutex<Option<Result<Value, String>>>>;
++
++pub(crate) struct SepRun {
++    res: Res,
++    prog_file: std::path::PathBuf,
++    pub(crate) msg: String,
++}
++
++/// Le clip audio selezionate (con l'audio collegato alle clip video selezionate).
++fn selected_audio(app: &FilmcraftApp) -> Vec<u64> {
++    filmcraft_engine::jarvis::stem_targets(&app.session).into_iter().map(|t| t.0).collect()
++}
++
++/// Ducking: `music` sono le clip da abbassare; `voice` (se ci sono) diventano Dialogo.
++fn duck(app: &mut FilmcraftApp, music: &[u64], voice: &[u64]) -> Result<usize, String> {
++    if music.is_empty() {
++        return Err("seleziona le clip di musica".into());
++    }
++    let s = &mut app.session;
++    if !voice.is_empty() {
++        s.execute("essentialSound.setType", json!({"clips": voice, "type": "dialogue"})).map_err(|e| e.to_string())?;
++    }
++    s.execute("essentialSound.setType", json!({"clips": music, "type": "music"})).map_err(|e| e.to_string())?;
++    s.execute(
++        "essentialSound.set",
++        json!({"clips": music, "values": {"ducking.enabled": true, "ducking.against": ["dialogue"], "ducking.againstUntyped": voice.is_empty(),
++                                          "ducking.sensitivity": 6.0, "ducking.reduceDb": -14.0, "ducking.fadeS": 0.35}}),
++    )
++    .map_err(|e| e.to_string())?;
++    s.execute("essentialSound.generateDucking", json!({"clips": music})).map_err(|e| e.to_string())?;
++    Ok(music.len())
++}
++
++pub(crate) fn duck_selected(app: &mut FilmcraftApp) {
++    let music = selected_audio(app);
++    app.ui.status = match duck(app, &music, &[]) {
++        Ok(n) => format!("✅ Musica abbassata quando parli ({n} clip). Se la vuoi più bassa: Essential Sound → Ducking"),
++        Err(e) => format!("⚠ {e}"),
++    };
++}
++
++fn tmp(name: &str) -> std::path::PathBuf {
++    let d = std::env::temp_dir().join("FilmCraftJarvis");
++    let _ = std::fs::create_dir_all(&d);
++    d.join(name)
++}
++
++/// Dove mettere i WAV separati: accanto al progetto (cartella "Audio separato"), se no nei temporanei.
++fn stems_dir(app: &FilmcraftApp) -> std::path::PathBuf {
++    let base = app.session.path.as_ref().and_then(|p| std::path::Path::new(p).parent().map(|d| d.join("Audio separato")));
++    let d = base.unwrap_or_else(|| tmp("separati"));
++    let _ = std::fs::create_dir_all(&d);
++    d
++}
++
++pub(crate) fn separate_selected(app: &mut FilmcraftApp, ctx: &egui::Context) {
++    if app.jarvis_ui.sep.is_some() {
++        return;
++    }
++    let Some(exe) = filmcraft_engine::jarvis::jarvis_exe() else {
++        app.ui.status = "⚠ Per separare voce e musica serve Jarvis Clipper installato e aggiornato".into();
++        return;
++    };
++    let targets = filmcraft_engine::jarvis::stem_targets(&app.session);
++    if targets.is_empty() {
++        app.ui.status = "⚠ Seleziona le clip (con l'audio) da separare".into();
++        return;
++    }
++    let dir = stems_dir(app);
++    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() % 1_000_000).unwrap_or(0);
++    let items: Vec<Value> = targets
++        .iter()
++        .map(|(clip, path, start, dur)| {
++            let stem = std::path::Path::new(path).file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "audio".into());
++            let stem: String = stem.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '_' || *c == '-').take(40).collect();
++            json!({"clip": clip, "path": path, "start": start, "dur": dur,
++                   "voice": dir.join(format!("{stem}_{stamp}_{clip}_voce.wav")).to_string_lossy(),
++                   "music": dir.join(format!("{stem}_{stamp}_{clip}_musica.wav")).to_string_lossy()})
++        })
++        .collect();
++    let job = tmp("separa_job.json");
++    let out = tmp("separa_out.json");
++    let _ = std::fs::remove_file(&out);
++    let prog_file = std::path::PathBuf::from(format!("{}.progress", out.to_string_lossy()));
++    let _ = std::fs::remove_file(&prog_file);
++    if std::fs::write(&job, json!({"items": items}).to_string()).is_err() {
++        app.ui.status = "⚠ Non riesco a scrivere nella cartella temporanea".into();
++        return;
++    }
++    let res: Res = Arc::new(Mutex::new(None));
++    let r2 = res.clone();
++    let c2 = ctx.clone();
++    std::thread::spawn(move || {
++        let r = (|| -> Result<Value, String> {
++            let mut cmd = std::process::Command::new(exe);
++            cmd.arg("--separa").arg(&job).arg(&out);
++            #[cfg(windows)]
++            {
++                use std::os::windows::process::CommandExt;
++                cmd.creation_flags(0x0800_0000);
++            }
++            let st = cmd.status().map_err(|e| e.to_string())?;
++            let txt = std::fs::read_to_string(&out).map_err(|_| if st.success() { "Jarvis non ha risposto".to_string() } else { "Jarvis Clipper ha dato errore (aggiornalo)".to_string() })?;
++            let v: Value = serde_json::from_str(&txt).map_err(|e| e.to_string())?;
++            if let Some(e) = v["error"].as_str() {
++                return Err(e.to_string());
++            }
++            Ok(json!({"items": items, "result": v}))
++        })();
++        if let Ok(mut g) = r2.lock() {
++            *g = Some(r);
++        }
++        c2.request_repaint();
++    });
++    app.jarvis_ui.sep = Some(SepRun { res, prog_file, msg: "Separo voce e musica…".into() });
++    app.ui.status = "Jarvis sta separando voce e musica: puoi continuare a lavorare".into();
++}
++
++/// A ogni frame: avanzamento e, alla fine, voce e musica nella timeline + ducking.
++pub(crate) fn poll(app: &mut FilmcraftApp, ctx: &egui::Context) {
++    let Some(run) = app.jarvis_ui.sep.as_mut() else { return };
++    if let Ok(t) = std::fs::read_to_string(&run.prog_file)
++        && let Ok(v) = serde_json::from_str::<Value>(&t)
++    {
++        let m = v["msg"].as_str().unwrap_or("").to_string();
++        if !m.is_empty() {
++            run.msg = format!("{m} ({}%)", (v["f"].as_f64().unwrap_or(0.0) * 100.0) as i32);
++            app.ui.status = run.msg.clone();
++        }
++    }
++    let done = run.res.lock().ok().and_then(|mut g| g.take());
++    let Some(r) = done else {
++        ctx.request_repaint_after(std::time::Duration::from_millis(500));
++        return;
++    };
++    app.jarvis_ui.sep = None;
++    let v = match r {
++        Ok(v) => v,
++        Err(e) => {
++            app.ui.status = format!("⚠ Separazione: {e}");
++            return;
++        }
++    };
++    let items: Vec<Value> = v["items"]
++        .as_array()
++        .map(|a| {
++            a.iter()
++                .filter(|i| [i["voice"].as_str(), i["music"].as_str()].iter().all(|p| p.is_some_and(|p| std::path::Path::new(p).is_file())))
++                .map(|i| json!({"clip": i["clip"], "voice": i["voice"], "music": i["music"]}))
++                .collect()
++        })
++        .unwrap_or_default();
++    if items.is_empty() {
++        app.ui.status = "⚠ Jarvis non ha prodotto l'audio separato".into();
++        return;
++    }
++    let placed = match app.session.execute("jarvis.placeStems", json!({"items": items})) {
++        Ok(p) => p,
++        Err(e) => {
++            app.ui.status = format!("⚠ {e}");
++            return;
++        }
++    };
++    let ids = |k: &str| -> Vec<u64> { placed[k].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default() };
++    let (voice, music) = (ids("voice"), ids("music"));
++    app.ui.status = match duck(app, &music, &voice) {
++        Ok(_) => format!("✅ Voce e musica separate ({} clip): la musica si abbassa quando parli. L'audio originale è spento, non cancellato.", music.len()),
++        Err(e) => format!("Voce e musica separate, ma il ducking non è riuscito: {e}"),
++    };
 +}
 diff --git a/crates/ui-egui/src/jarvis_social.rs b/crates/ui-egui/src/jarvis_social.rs
 new file mode 100644
@@ -3606,10 +3925,10 @@ index 0000000..9c8196e
 +}
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..791ed6b
+index 0000000..5c3e973
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
-@@ -0,0 +1,1055 @@
+@@ -0,0 +1,1133 @@
 +//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
 +
 +use serde_json::{Value, json};
@@ -3648,6 +3967,8 @@ index 0000000..791ed6b
 +    sfx_gain: f32,
 +    /// trascrizione in corso in background
 +    cap: Option<CapRun>,
++    /// separazione voce/musica in corso
++    pub(crate) sep: Option<crate::jarvis_audio::SepRun>,
 +    /// aggiornamento: controllo fatto, versione nuova (tag, url), scartato
 +    upd_checked: bool,
 +    upd: std::sync::Arc<std::sync::Mutex<Option<(String, String)>>>,
@@ -3699,6 +4020,7 @@ index 0000000..791ed6b
 +            sfx: false,
 +            sfx_gain: -3.0,
 +            cap: None,
++            sep: None,
 +            upd_checked: false,
 +            upd: Default::default(),
 +            upd_dismissed: false,
@@ -3729,6 +4051,7 @@ index 0000000..791ed6b
 +    update_banner(app, ctx);
 +    poll_captions(app, ctx);
 +    crate::jarvis_assist::poll(app, ctx);
++    crate::jarvis_audio::poll(app, ctx);
 +    learn_snapshot(app);
 +    composer_drag(app, ctx);
 +    if !app.jarvis_ui.presets_checked {
@@ -4055,6 +4378,43 @@ index 0000000..791ed6b
 +    }
 +}
 +
++/// Pannello Testo: trascrive la sequenza con Jarvis (senza fare sottotitoli), per montare dal testo.
++pub(crate) fn transcribe_only(app: &mut FilmcraftApp, ctx: &egui::Context) {
++    if app.jarvis_ui.cap.is_some() {
++        return;
++    }
++    let p = json!({"language": "it", "model": "whisper-small", "only_transcript": true});
++    match filmcraft_engine::jarvis::prepare_captions(&app.session, &p) {
++        Ok(None) => app.ui.status = "La trascrizione c'è già".into(),
++        Ok(Some(job)) => {
++            let prog = std::sync::Arc::new(std::sync::Mutex::new((0.0f32, "Preparo l'audio…".to_string())));
++            let pr2 = prog.clone();
++            let c2 = ctx.clone();
++            let handle = std::thread::spawn(move || {
++                let cb = move |f: f32, m: String| {
++                    if let Ok(mut g) = pr2.lock() {
++                        *g = (f, m);
++                    }
++                    c2.request_repaint();
++                };
++                filmcraft_engine::jarvis::run_captions(job, &cb)
++            });
++            app.jarvis_ui.cap = Some(CapRun { handle, prog, params: p });
++        }
++        Err(e) => app.ui.status = format!("⚠ {e}"),
++    }
++}
++
++/// A che punto è la trascrizione/sottotitoli di Jarvis in corso (per il pannello Testo).
++pub(crate) fn transcribe_progress(app: &FilmcraftApp) -> Option<(f32, String)> {
++    app.jarvis_ui.cap.as_ref().map(|c| c.prog.lock().map(|g| g.clone()).unwrap_or((0.0, String::new())))
++}
++
++/// Jarvis Clipper è installato (trascrive lui con la scheda video)?
++pub(crate) fn jarvis_can_transcribe() -> bool {
++    filmcraft_engine::jarvis::jarvis_exe().is_some()
++}
++
 +fn poll_captions(app: &mut FilmcraftApp, ctx: &egui::Context) {
 +    let finished = app.jarvis_ui.cap.as_ref().is_some_and(|c| c.handle.is_finished());
 +    if !finished {
@@ -4069,6 +4429,11 @@ index 0000000..791ed6b
 +        Ok(done) => {
 +            if let Err(e) = filmcraft_engine::jarvis::apply_transcripts(&mut app.session, done) {
 +                app.jarvis_ui.msg = format!("⚠ {e}");
++                app.ui.status = format!("Trascrizione: {e}");
++                return;
++            }
++            if run.params["only_transcript"].as_bool().unwrap_or(false) {
++                app.ui.status = "✅ Trascrizione pronta: nel pannello Testo selezioni le parole e le tagli con Canc".into();
 +                return;
 +            }
 +            let mut p = run.params;
@@ -4601,6 +4966,38 @@ index 0000000..791ed6b
 +    }
 +}
 +
++/// Tasto destro sulla timeline: stabilizzatore, Morph Cut e audio (musica sotto la voce).
++pub(crate) fn tools_menu(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut egui::Ui) {
++    let vids: Vec<u64> = app
++        .session
++        .active_sequence()
++        .map(|q| q.video_tracks.iter().flat_map(|t| t.items.iter()).filter(|it| app.session.state.selection.contains(&it.id)).map(|it| it.id.0).collect())
++        .unwrap_or_default();
++    let mut run: Option<(&str, Value)> = None;
++    if ui.add_enabled(!vids.is_empty(), egui::Button::new("🎥 Stabilizza (video mosso)")).on_hover_text("Aggiunge Warp Stabilizer alle clip video selezionate: la prima volta analizza il movimento").clicked() {
++        run = Some(("effects.apply", json!({"clips": vids, "effect": "warp_stabilizer"})));
++    }
++    if ui.button("🪄 Morph Cut sul taglio vicino all'indicatore").on_hover_text("Fonde i due pezzi di un taglio a metà frase, così il jump cut non si nota").clicked() {
++        run = Some(("jarvis.transition", json!({"preset": "morph", "scope": "playhead", "sfx": false})));
++    }
++    let busy = app.jarvis_ui.sep.is_some();
++    if ui.add_enabled(!busy, egui::Button::new("🎵 Abbassa la musica quando parlo")).on_hover_text("Seleziona le clip di musica (su una traccia diversa dalla voce): si abbassano da sole mentre parli").clicked() {
++        crate::jarvis_audio::duck_selected(app);
++        ui.close();
++    }
++    if ui.add_enabled(!busy, egui::Button::new("🎤 Separa voce e musica, poi abbassa la musica")).on_hover_text("Per quando voce e musica sono nella stessa traccia: Jarvis le divide su due tracce nuove (Voce e Musica)").clicked() {
++        crate::jarvis_audio::separate_selected(app, ctx);
++        ui.close();
++    }
++    if let Some((cmd, p)) = run {
++        match crate::menus::invoke(app, ctx, cmd, p) {
++            Ok(_) => app.ui.status = if cmd == "effects.apply" { "✅ Stabilizzatore aggiunto (in Controlli effetti puoi regolarlo)".into() } else { "✅ Morph Cut messo".into() },
++            Err(e) => app.ui.status = format!("⚠ {e}"),
++        }
++        ui.close();
++    }
++}
++
 +/// I tratti della timeline coperti dalle clip selezionate (senza i sottotitoli), uniti, in tick.
 +/// Contano le clip video selezionate; l'audio solo se non c'è nessun video selezionato (l'audio
 +/// collegato o un audio lungo non tagliato allargava il tratto a tutta la sequenza).
@@ -4666,21 +5063,22 @@ index 0000000..791ed6b
 +    *g = Some((now, seen));
 +}
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
-index c3fb34a..1a00364 100644
+index c3fb34a..5d146db 100644
 --- a/crates/ui-egui/src/lib.rs
 +++ b/crates/ui-egui/src/lib.rs
-@@ -73,6 +73,10 @@ pub mod state;
+@@ -73,6 +73,11 @@ pub mod state;
  pub mod theme;
  mod theme_favorites;
  pub mod updates_ui;
 +pub(crate) mod jarvis_ui;
 +pub(crate) mod jarvis_titles;
 +pub(crate) mod jarvis_assist;
++pub(crate) mod jarvis_audio;
 +pub(crate) mod jarvis_social;
  pub mod widgets;
  
  use std::collections::HashMap;
-@@ -215,6 +219,7 @@ pub struct FilmcraftApp {
+@@ -215,6 +220,7 @@ pub struct FilmcraftApp {
      pub hooks: HostHooks,
      pub dialog: Option<Dialog>,
      pub(crate) updates_rt: updates_ui::Runtime,
@@ -4688,7 +5086,7 @@ index c3fb34a..1a00364 100644
      pub file_dialogs: panels::file_dialogs::FileDialogState,
      /// The native file dialog the host is showing ([`Self::pick`]).
      native_dialog: Option<native_dialogs::PendingDialog>,
-@@ -351,6 +356,8 @@ pub struct FilmcraftApp {
+@@ -351,6 +357,8 @@ pub struct FilmcraftApp {
      fonts_ready: bool,
      pub integrated_titlebar: bool,
      pub last_timeline_width: f32,
@@ -5186,6 +5584,106 @@ index a8de6e0..97dd4f9 100644
      let buttons: Vec<(Icon, &str, &str)> = if src {
          vec![
              (Icon::Marker, "markers.add", tl!("Add Marker (M)")),
+diff --git a/crates/ui-egui/src/panels/text.rs b/crates/ui-egui/src/panels/text.rs
+index 043992c..65784d0 100644
+--- a/crates/ui-egui/src/panels/text.rs
++++ b/crates/ui-egui/src/panels/text.rs
+@@ -572,12 +572,19 @@ fn transcript(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
+     if words.is_empty() {
+         let c = rect.center();
+         icons::paint(ui.painter(), Rect::from_center_size(c - vec2(0.0, 70.0), vec2(40.0, 40.0)), Icon::Captions, t.text_dim);
+-        ui.painter().text(c - vec2(0.0, 30.0), Align2::CENTER_CENTER, tl!("Transcribe sequence"), Tokens::semibold(16.0), t.text);
+-        let available = filmcraft_speech_available(app);
++        ui.painter().text(c - vec2(0.0, 30.0), Align2::CENTER_CENTER, "Monta dal testo", Tokens::semibold(16.0), t.text);
++        // Jarvis: senza speech-to-text interno trascrive Jarvis Clipper (scheda video)
++        let jarvis = !filmcraft_speech_available(app) && crate::jarvis_ui::jarvis_can_transcribe();
++        if let Some((f, m)) = crate::jarvis_ui::transcribe_progress(app) {
++            ui.painter().text(c - vec2(0.0, 8.0), Align2::CENTER_CENTER, format!("{m} ({}%)", (f * 100.0) as i32), Tokens::ui(12.0), t.text_dim);
++            ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
++            return;
++        }
++        let available = filmcraft_speech_available(app) || jarvis;
+         let note = if available {
+-            tl!("Speech-to-text turns the dialogue into editable text.")
++            "Trascrivi: poi selezioni le parole e premi Canc per tagliarle anche dal video."
+         } else {
+-            tl!("This build has no speech-to-text; import a transcript with transcript.set.")
++            "Per trascrivere serve Jarvis Clipper installato."
+         };
+         ui.painter().text(c - vec2(0.0, 8.0), Align2::CENTER_CENTER, note, Tokens::ui(12.0), t.text_dim);
+         let r = Rect::from_center_size(c + vec2(0.0, 26.0), vec2(200.0, 26.0));
+@@ -596,7 +603,12 @@ fn transcript(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
+             e.enabled = Some(available);
+         }
+         if available && resp.clicked() {
+-            actions.push(("transcript.generate".into(), json!({})));
++            if jarvis {
++                let ctx = ui.ctx().clone();
++                crate::jarvis_ui::transcribe_only(app, &ctx);
++            } else {
++                actions.push(("transcript.generate".into(), json!({})));
++            }
+         } else if !available {
+             resp.on_hover_text(note);
+         }
+@@ -615,10 +627,23 @@ fn transcript(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
+     let highlights = app.transcript_cache.highlights(&app.ui.transcript_search);
+     let mut x = bar.min.x + sw + 10.0;
+     let range = sel.map(|(a, b)| json!({"from": a.min(b), "to": a.max(b)}));
+-    let tools: [(Icon, &str, &str, bool, &str, Value); 4] = [
+-        (Icon::Razor, "text.transcript.extract", tl!("Extract selected text"), sel.is_some(), "transcript.extract", range.clone().unwrap_or_default()),
+-        (Icon::Trash, "text.transcript.lift", tl!("Lift selected text"), sel.is_some(), "transcript.lift", range.unwrap_or_default()),
+-        (Icon::Link, "text.transcript.removeFillers", tl!("Remove filler words"), true, "transcript.removeFillers", json!({})),
++    if sel.is_some() && ui.rect_contains_pointer(rect) {
++        TEXT_HOT.store(ui.ctx().cumulative_pass_nr() + 1, std::sync::atomic::Ordering::Relaxed);
++    }
++    // Jarvis: Canc / Backspace sulle parole selezionate le tagliano anche dal video (se nessuna
++    // scorciatoia li ha già presi: vedi app/keys.rs)
++    if let Some(r) = range.clone()
++        && (app.ui.focused == crate::dock::PanelKind::Text || ui.rect_contains_pointer(rect))
++        && ui.ctx().input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
++    {
++        app.ui.transcript_sel = None;
++        actions.push(("transcript.extract".into(), r));
++    }
++    let tools: [(Icon, &str, &str, bool, &str, Value); 5] = [
++        (Icon::Razor, "text.transcript.extract", "Taglia le parole selezionate e chiudi il buco (Canc)", sel.is_some(), "transcript.extract", range.clone().unwrap_or_default()),
++        (Icon::Trash, "text.transcript.lift", "Togli le parole selezionate lasciando il buco", sel.is_some(), "transcript.lift", range.unwrap_or_default()),
++        (Icon::Mute, "text.transcript.removeFillers", "Togli gli intercalari (ehm, cioè…)", true, "transcript.removeFillers", json!({"fillers": ["ehm", "eh", "ehh", "mmh", "mh", "uhm", "um", "uh", "ah", "hmm", "mm"]})),
++        (Icon::Ripple, "text.transcript.removePauses", "Togli le pause", true, "transcript.removePauses", json!({})),
+         (Icon::Captions, "text.transcript.createCaptions", tl!("Create captions"), true, "transcript.createCaptions", json!({})),
+     ];
+     for (icon, id, label, enabled, cmd, params) in tools {
+@@ -666,6 +691,8 @@ fn transcript(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
+                     let resp = ui.add(egui::Label::new(text).sense(Sense::click()));
+                     app.auto.add(&format!("text.transcript.word.{i}"), resp.rect, &w.text);
+                     if resp.clicked() {
++                        // Jarvis: cliccare le parole porta il fuoco sul pannello Testo (Canc taglia qui)
++                        app.ui.focused = crate::dock::PanelKind::Text;
+                         let shift = ui.input(|inp| inp.modifiers.shift);
+                         app.ui.transcript_sel = Some(match (shift, sel) {
+                             (true, Some((a, _))) => (a, i),
+@@ -682,6 +709,20 @@ fn transcript(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
+     run(app, ui, actions);
+ }
+ 
++/// Jarvis: il mouse è sul pannello Testo con parole selezionate (Canc / Backspace le tagliano,
++/// qualunque pannello abbia il fuoco).
++static TEXT_HOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++
++pub fn text_hot(ctx: &egui::Context) -> bool {
++    let f = TEXT_HOT.load(std::sync::atomic::Ordering::Relaxed);
++    f > 0 && f + 3 >= ctx.cumulative_pass_nr() + 1
++}
++
++/// Quante parole ha la trascrizione della sequenza (per Canc nel pannello Testo).
++pub fn transcript_len(app: &mut FilmcraftApp) -> usize {
++    app.transcript_cache.content(&app.session).words.len()
++}
++
+ fn filmcraft_speech_available(app: &FilmcraftApp) -> bool {
+     app.session.transcriber.is_some() || filmcraft_engine::transcript::speech_available()
+ }
 diff --git a/crates/ui-egui/src/panels/timeline.rs b/crates/ui-egui/src/panels/timeline.rs
 index 13b90a6..3e22b6a 100644
 --- a/crates/ui-egui/src/panels/timeline.rs
@@ -5266,7 +5764,7 @@ index 4cc5973..7a65dc1 100644
              *h = if *h < 50.0 { 64.0 } else { 30.0 };
          }
 diff --git a/crates/ui-egui/src/panels/timeline/interact.rs b/crates/ui-egui/src/panels/timeline/interact.rs
-index 7eb176f..146bed1 100644
+index 7eb176f..c7fa3db 100644
 --- a/crates/ui-egui/src/panels/timeline/interact.rs
 +++ b/crates/ui-egui/src/panels/timeline/interact.rs
 @@ -192,8 +192,21 @@ fn move_is_locked(seq: &Sequence, clips: &[ClipId], delta: i32) -> bool {
@@ -5336,11 +5834,13 @@ index 7eb176f..146bed1 100644
                      let mut seen = std::collections::HashSet::new();
                      let moves: Vec<Value> = clips
                          .iter()
-@@ -1407,6 +1432,8 @@ pub(super) fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence
+@@ -1407,6 +1432,10 @@ pub(super) fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence
              let picked: Vec<&filmcraft_project::TrackItem> = sel.iter().filter_map(|c| seq.find_item(*c).map(|(_, it)| it)).collect();
              let all_enabled = !picked.is_empty() && picked.iter().all(|it| it.enabled);
              let linked = picked.iter().any(|it| it.link.is_some());
 +            crate::jarvis_ui::caption_menu(app, &ctx, ui);
++            ui.separator();
++            crate::jarvis_ui::tools_menu(app, &ctx, ui);
 +            ui.separator();
              let mut first = true;
              for group in CLIP_MENU {
