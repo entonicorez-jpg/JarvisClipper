@@ -334,10 +334,34 @@ def job_export(pid, ids, do_render, to_filmcraft=False):
     kind = "FilmCraft" if to_filmcraft else "Premiere"
     xml = os.path.join(out, f"{p.get('name', 'clips')[:50]}_{kind}_{stamp}.xml")
     folder = f"Clip Jarvis {time.strftime('%H:%M')} - {p.get('name', '')[:40]}" if to_filmcraft else "Jarvis Clipper"
-    premiere.build_xml(sel, p["src_path"], p["info"], p["layout"], rendered, xml, folder=folder)
+    light = {}
+    if to_filmcraft:
+        # pezzi leggeri della VOD: frame rate costante e un keyframe ogni mezzo secondo (le VOD di
+        # Kick/OBS sono a frame rate variabile con keyframe radi: FilmCraft le legge a fatica)
+        ldir = os.path.join(out, "Media leggeri")
+        os.makedirs(ldir, exist_ok=True)
+        fps, tb, _ = media.edit_rate(p["info"])
+        for k, c in enumerate(sel):
+            if stopped(pid):
+                raise RuntimeError("Annullato")
+            set_job(pid, progress=k / len(sel), msg=f"Preparo il video leggero per FilmCraft {k + 1}/{len(sel)}…")
+            off = max(0.0, c["start"] - 3.0)
+            ldur = min(p["info"]["dur"], c["end"] + 3.0) - off
+            lp = os.path.join(ldir, f"Clip_{c['id']:02d}_{int(c['start'])}.mp4")
+            if not os.path.exists(lp):
+                r = media.run(["-y", "-hide_banner", "-loglevel", "error", "-ss", f"{off:.3f}", "-t", f"{ldur:.3f}", "-i", p["src_path"],
+                               "-map", "0:v:0", "-map", "0:a:0?", "-fps_mode", "cfr", "-r", f"{fps:.5f}"]
+                              + media.venc("edit", gop=max(2, round(fps / 2)))
+                              + ["-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-movflags", "+faststart", lp + ".part.mp4"])
+                if r.returncode != 0 or not os.path.exists(lp + ".part.mp4"):
+                    set_job(pid, log=f"Video leggero non creato per la clip {c['id']} (uso la VOD intera): {r.stderr[-200:]}")
+                    continue
+                os.replace(lp + ".part.mp4", lp)
+            light[c["id"]] = (lp, off, ldur)
+    premiere.build_xml(sel, p["src_path"], p["info"], p["layout"], rendered, xml, folder=folder, light=light)
     opened = False
     if to_filmcraft:
-        impara.save_clips_proposal(p["src_path"], sel)
+        impara.save_clips_proposal(p["src_path"], sel, light)
         try:
             opened = filmcraft.open_xml(xml)
         except Exception as e:

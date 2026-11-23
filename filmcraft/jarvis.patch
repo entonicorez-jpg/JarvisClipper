@@ -296,10 +296,10 @@ index 44399e4..f4606e8 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..177bcaf
+index 0000000..2d63e81
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,1825 @@
+@@ -0,0 +1,1826 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -1419,7 +1419,8 @@ index 0000000..177bcaf
 +    let filmcraft_project::MediaRef::File { path } = &m.media else { return None };
 +    let txt = std::fs::read_to_string(format!("{path}.jarvis-words.json")).ok()?;
 +    let v: Value = serde_json::from_str(&txt).ok()?;
-+    let covered: Vec<(f64, f64)> = v["ranges"].as_array()?.iter().filter_map(|r| Some((r[0].as_f64()?, r[1].as_f64()?))).collect();
++    // solo i tratti trascritti bene (modello grande): quella veloce della ricerca clip sbaglia troppe parole
++    let covered: Vec<(f64, f64)> = v["hq"].as_array()?.iter().filter_map(|r| Some((r[0].as_f64()?, r[1].as_f64()?))).collect();
 +    // ogni pezzo usato deve stare (quasi) tutto dentro le parti già trascritte
 +    for (a, b) in ranges {
 +        let (a, b) = (a.seconds() + 0.6, b.seconds() - 0.6);
@@ -2291,6 +2292,34 @@ index abfbd93..3dea546 100644
          }
      }
  }
+diff --git a/crates/export/src/settings.rs b/crates/export/src/settings.rs
+index e44669f..077fd2f 100644
+--- a/crates/export/src/settings.rs
++++ b/crates/export/src/settings.rs
+@@ -78,10 +78,10 @@ impl H264Profile {
+ #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(rename_all = "camelCase")]
+ pub enum HardwareEncoding {
+-    #[default]
+     Off,
+     /// Use the hardware encoder when the system has one and it takes the settings; otherwise the
+-    /// software encoder.
++    /// software encoder. Jarvis: predefinito (NVENC sulle schede NVIDIA, molto più veloce).
++    #[default]
+     Auto,
+ }
+ 
+@@ -96,8 +96,9 @@ pub enum HardwareEncoding {
+ #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(rename_all = "camelCase")]
+ pub enum GpuRendering {
+-    Auto,
++    /// Jarvis: predefinito (il compositing sulla scheda video, con la CPU come riserva).
+     #[default]
++    Auto,
+     Off,
+ }
+ 
 diff --git a/crates/interchange/src/timeline_model.rs b/crates/interchange/src/timeline_model.rs
 index 0a57a1a..172cbe8 100644
 --- a/crates/interchange/src/timeline_model.rs
@@ -3577,10 +3606,10 @@ index 0000000..9c8196e
 +}
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..6911a92
+index 0000000..791ed6b
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
-@@ -0,0 +1,1032 @@
+@@ -0,0 +1,1055 @@
 +//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
 +
 +use serde_json::{Value, json};
@@ -3819,37 +3848,21 @@ index 0000000..6911a92
 +                ui.checkbox(&mut st.retranscribe, "Ritrascrivi");
 +            });
 +            let sel_ranges = selected_ranges(&app.session);
-+            ui.horizontal(|ui| {
-+                ui.checkbox(&mut st.only_sel, "Solo le clip selezionate")
-+                    .on_hover_text("Seleziona nella timeline le clip da sottotitolare: trascrive e sottotitola solo quelle, il resto non lo tocca");
-+                if st.only_sel {
-+                    if sel_ranges.is_empty() {
-+                        ui.small("(nessuna selezionata: faccio tutto)");
-+                    } else {
-+                        ui.small(format!("({} tratti)", sel_ranges.len()));
-+                    }
-+                }
-+            });
++            if st.only_sel {
++                ui.small(if sel_ranges.is_empty() {
++                    "Solo clip selezionate: ATTIVO (nessuna selezionata ora: farei tutto). Si cambia col tasto destro sulla timeline.".to_string()
++                } else {
++                    format!("Solo clip selezionate: ATTIVO ({} tratti). Si cambia col tasto destro sulla timeline.", sel_ranges.len())
++                });
++            } else {
++                ui.small("Sottotitola tutta la sequenza. Per farne solo alcune: tasto destro sulla timeline.");
++            }
 +            if let Some(c) = &st.cap {
 +                let (f, m) = c.prog.lock().map(|g| g.clone()).unwrap_or((0.0, String::new()));
 +                ui.add(egui::ProgressBar::new(f.clamp(0.0, 1.0)).text(m).desired_width(ui.available_width()));
 +                ui.small("Puoi continuare a lavorare: i sottotitoli arrivano da soli quando ha finito.");
 +            } else if ui.add_sized([ui.available_width(), 30.0], egui::Button::new("✨ Crea sottotitoli")).clicked() {
-+                let mut p = json!({
-+                    "style": STYLES[st.style.min(STYLES.len() - 1)].id, "upper": st.upper, "pop": st.pop, "censor": st.censor,
-+                    "anim": ANIMS[st.anim.min(ANIMS.len() - 1)].0, "tilt": st.tilt, "x": st.x / 100.0,
-+                    "size": st.size, "model": if st.precise { "whisper-small" } else { "whisper-base" }, "language": "it",
-+                    "retranscribe": st.retranscribe, "font": st.font,
-+                });
-+                if st.words > 0 {
-+                    p["words"] = json!(st.words);
-+                }
-+                if st.only_sel && !sel_ranges.is_empty() {
-+                    p["ranges"] = json!(sel_ranges.iter().map(|(a, b)| [a, b]).collect::<Vec<_>>());
-+                }
-+                if st.y > 0.0 {
-+                    p["y"] = json!(st.y / 100.0);
-+                }
++                let p = caption_params(st, if st.only_sel { &sel_ranges } else { &[] });
 +                run = Some(("jarvis.captionsBg".into(), p, String::new()));
 +            }
 +            ui.small("Finiscono sulla traccia \"Sottotitoli Jarvis\": ogni pezzo si modifica come un testo normale.");
@@ -4549,22 +4562,61 @@ index 0000000..6911a92
 +    p.line_segment([egui::pos2(rect.min.x, c.y), egui::pos2(rect.max.x, c.y)], egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(120, 90, 255, 90)));
 +}
 +
++/// I parametri per i sottotitoli con le scelte della scheda (e i tratti, se ce ne sono).
++fn caption_params(st: &State, ranges: &[(i64, i64)]) -> Value {
++    let mut p = json!({
++        "style": STYLES[st.style.min(STYLES.len() - 1)].id, "upper": st.upper, "pop": st.pop, "censor": st.censor,
++        "anim": ANIMS[st.anim.min(ANIMS.len() - 1)].0, "tilt": st.tilt, "x": st.x / 100.0,
++        "size": st.size, "model": if st.precise { "whisper-small" } else { "whisper-base" }, "language": "it",
++        "retranscribe": st.retranscribe, "font": st.font,
++    });
++    if st.words > 0 {
++        p["words"] = json!(st.words);
++    }
++    if !ranges.is_empty() {
++        p["ranges"] = json!(ranges.iter().map(|(a, b)| [a, b]).collect::<Vec<_>>());
++    }
++    if st.y > 0.0 {
++        p["y"] = json!(st.y / 100.0);
++    }
++    p
++}
++
++/// Tasto destro sulla timeline: sottotitoli Jarvis sulle clip selezionate e l'interruttore
++/// "solo clip selezionate" (lo stesso della scheda Sottotitoli).
++pub(crate) fn caption_menu(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut egui::Ui) {
++    let ranges = selected_ranges(&app.session);
++    let busy = app.jarvis_ui.cap.is_some();
++    let r = ui.add_enabled(!ranges.is_empty() && !busy, egui::Button::new("✨ Sottotitoli Jarvis sulle clip selezionate"));
++    let r = if busy { r.on_disabled_hover_text("Sto già facendo dei sottotitoli: aspetta che finisca") } else { r.on_disabled_hover_text("Seleziona prima le clip") };
++    if r.clicked() {
++        let p = caption_params(&app.jarvis_ui, &ranges);
++        start_captions(app, ctx, p);
++        ui.close();
++    }
++    let mut on = app.jarvis_ui.only_sel;
++    if ui.checkbox(&mut on, "Sottotitoli Jarvis: solo clip selezionate").on_hover_text("Acceso: \"Crea sottotitoli\" nel Jarvis Composer fa solo le clip selezionate. Spento: tutta la sequenza.").changed() {
++        app.jarvis_ui.only_sel = on;
++        ui.close();
++    }
++}
++
 +/// I tratti della timeline coperti dalle clip selezionate (senza i sottotitoli), uniti, in tick.
++/// Contano le clip video selezionate; l'audio solo se non c'è nessun video selezionato (l'audio
++/// collegato o un audio lungo non tagliato allargava il tratto a tutta la sequenza).
 +fn selected_ranges(s: &filmcraft_engine::Session) -> Vec<(i64, i64)> {
 +    let Some(q) = s.active_sequence() else { return Vec::new() };
 +    let sel = &s.state.selection;
 +    if sel.is_empty() {
 +        return Vec::new();
 +    }
-+    let mut r: Vec<(i64, i64)> = q
-+        .video_tracks
-+        .iter()
-+        .filter(|t| t.name != filmcraft_engine::jarvis::CAPTION_TRACK)
-+        .chain(q.audio_tracks.iter())
-+        .flat_map(|t| t.items.iter())
-+        .filter(|it| sel.contains(&it.id))
-+        .map(|it| (it.start.0, it.end().0))
-+        .collect();
++    let pick = |tracks: &mut dyn Iterator<Item = &filmcraft_project::Track>| -> Vec<(i64, i64)> {
++        tracks.flat_map(|t| t.items.iter()).filter(|it| sel.contains(&it.id)).map(|it| (it.start.0, it.end().0)).collect()
++    };
++    let mut r = pick(&mut q.video_tracks.iter().filter(|t| t.name != filmcraft_engine::jarvis::CAPTION_TRACK && t.name != filmcraft_engine::jarvis::TITLE_TRACK));
++    if r.is_empty() {
++        r = pick(&mut q.audio_tracks.iter());
++    }
 +    r.sort();
 +    let mut out: Vec<(i64, i64)> = Vec::new();
 +    for (a, b) in r {
@@ -4669,13 +4721,27 @@ index 5f1e294..773f599 100644
              let _ = crate::updates_ui::check(app);
              return Ok(serde_json::Value::Null);
 diff --git a/crates/ui-egui/src/panels/export_mode.rs b/crates/ui-egui/src/panels/export_mode.rs
-index b4ae463..5269aa1 100644
+index b4ae463..0c50b0e 100644
 --- a/crates/ui-egui/src/panels/export_mode.rs
 +++ b/crates/ui-egui/src/panels/export_mode.rs
-@@ -170,6 +170,26 @@ pub fn export_params(app: &FilmcraftApp) -> Value {
+@@ -170,6 +170,40 @@ pub fn export_params(app: &FilmcraftApp) -> Value {
      p
  }
  
++/// Jarvis: una volta sola accende export veloce (encoder della scheda video + render sulla GPU) anche
++/// nelle impostazioni già salvate, che prima nascevano spente. Dopo si può rispegnere a mano.
++fn jarvis_fast_once(ex: &mut ExportUi) {
++    let Some(base) = std::env::var_os("APPDATA").or_else(|| std::env::var_os("HOME")).map(std::path::PathBuf::from) else { return };
++    let mark = base.join("FilmCraft").join("jarvis_fast_export");
++    if mark.exists() {
++        return;
++    }
++    ex.settings.hardware_encoding = HardwareEncoding::Auto;
++    ex.settings.gpu_rendering = GpuRendering::Auto;
++    let _ = std::fs::create_dir_all(mark.parent().unwrap_or(&base));
++    let _ = std::fs::write(&mark, "1");
++}
++
 +/// Jarvis: dove si salva l'ultima cartella di export scelta.
 +fn dir_file() -> Option<std::path::PathBuf> {
 +    let base = std::env::var_os("APPDATA").or_else(|| std::env::var_os("HOME")).map(std::path::PathBuf::from)?;
@@ -4699,7 +4765,7 @@ index b4ae463..5269aa1 100644
  fn sync_sequence(app: &mut FilmcraftApp) {
      let Some(seq) = app.session.state.active_sequence else { return };
      if app.ui.export.for_sequence != Some(seq.0) || app.ui.export.file_name.is_empty() {
-@@ -177,7 +197,8 @@ fn sync_sequence(app: &mut FilmcraftApp) {
+@@ -177,7 +211,8 @@ fn sync_sequence(app: &mut FilmcraftApp) {
          app.ui.export.for_sequence = Some(seq.0);
      }
      if app.ui.export.location.is_empty() {
@@ -4709,6 +4775,14 @@ index b4ae463..5269aa1 100644
      }
      // As Premiere does: a sequence with In/Out marks exports that range unless another is chosen.
      // Only when the sequence or its marks change, so a Range picked by hand (or `ui.set`) stays.
+@@ -202,6 +237,7 @@ pub(super) fn is_export_busy(app: &FilmcraftApp) -> bool {
+ }
+ 
+ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
++    jarvis_fast_once(&mut app.ui.export);
+     let t = app.tokens;
+     let left = Rect::from_min_size(rect.min, vec2(300.0, rect.height()));
+     let right = Rect::from_min_max(pos2(rect.max.x - (rect.width() * 0.4).clamp(360.0, 640.0), rect.min.y), rect.max);
 diff --git a/crates/ui-egui/src/panels/export_mode/settings.rs b/crates/ui-egui/src/panels/export_mode/settings.rs
 index 9c8388d..63e72f1 100644
 --- a/crates/ui-egui/src/panels/export_mode/settings.rs
@@ -5192,7 +5266,7 @@ index 4cc5973..7a65dc1 100644
              *h = if *h < 50.0 { 64.0 } else { 30.0 };
          }
 diff --git a/crates/ui-egui/src/panels/timeline/interact.rs b/crates/ui-egui/src/panels/timeline/interact.rs
-index 7eb176f..a6f69c8 100644
+index 7eb176f..146bed1 100644
 --- a/crates/ui-egui/src/panels/timeline/interact.rs
 +++ b/crates/ui-egui/src/panels/timeline/interact.rs
 @@ -192,8 +192,21 @@ fn move_is_locked(seq: &Sequence, clips: &[ClipId], delta: i32) -> bool {
@@ -5262,6 +5336,15 @@ index 7eb176f..a6f69c8 100644
                      let mut seen = std::collections::HashSet::new();
                      let moves: Vec<Value> = clips
                          .iter()
+@@ -1407,6 +1432,8 @@ pub(super) fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence
+             let picked: Vec<&filmcraft_project::TrackItem> = sel.iter().filter_map(|c| seq.find_item(*c).map(|(_, it)| it)).collect();
+             let all_enabled = !picked.is_empty() && picked.iter().all(|it| it.enabled);
+             let linked = picked.iter().any(|it| it.link.is_some());
++            crate::jarvis_ui::caption_menu(app, &ctx, ui);
++            ui.separator();
+             let mut first = true;
+             for group in CLIP_MENU {
+                 if !std::mem::take(&mut first) {
 diff --git a/crates/ui-egui/src/panels/transform_handles.rs b/crates/ui-egui/src/panels/transform_handles.rs
 index a06589d..a3c8751 100644
 --- a/crates/ui-egui/src/panels/transform_handles.rs

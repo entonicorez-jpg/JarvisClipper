@@ -27,6 +27,34 @@ def run(args, **kw):
                           encoding="utf-8", errors="replace", creationflags=CREATE_NO_WINDOW, **kw)
 
 
+_NVENC = None
+
+
+def nvenc():
+    """C'è l'encoder H.264 della scheda NVIDIA (h264_nvenc)? Provato una volta con un fotogramma."""
+    global _NVENC
+    if _NVENC is None:
+        try:
+            r = run(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=black:s=256x256:d=0.1",
+                     "-frames:v", "2", "-c:v", "h264_nvenc", "-f", "null", "-"], timeout=30)
+            _NVENC = r.returncode == 0
+        except Exception:
+            _NVENC = False
+    return _NVENC
+
+
+def venc(quality="high", gop=None):
+    """Argomenti dell'encoder video: la scheda video se c'è (molto più veloce), se no x264."""
+    g = ["-g", str(gop)] if gop else []
+    if nvenc():
+        cq = {"high": "19", "edit": "18", "preview": "30"}.get(quality, "21")
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq", "-rc", "vbr", "-cq", cq, "-b:v", "0",
+                "-pix_fmt", "yuv420p"] + g
+    crf = {"high": "18", "edit": "17", "preview": "28"}.get(quality, "20")
+    pre = "ultrafast" if quality == "preview" else ("veryfast" if quality == "edit" else "veryfast")
+    return ["-c:v", "libx264", "-preset", pre, "-crf", crf, "-pix_fmt", "yuv420p"] + g
+
+
 def popen(args, **kw):
     return subprocess.Popen([ffmpeg_exe()] + args, creationflags=CREATE_NO_WINDOW, **kw)
 

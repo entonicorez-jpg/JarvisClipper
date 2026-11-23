@@ -54,12 +54,14 @@ def save_edit_proposal(src, ed, seq_name):
         pass
 
 
-def save_clips_proposal(src, clips):
+def save_clips_proposal(src, clips, light=None):
     try:
         for c in clips:
             nm = f"Clip {c['id']:02d} - {c['score']} - {c.get('title', '')}"[:80]
             d = {"kind": "clip", "src": src, "seq": nm, "time": time.time(), "start": c["start"], "end": c["end"],
                  "title": c.get("title", "")}
+            if light and c["id"] in light:  # in FilmCraft c'è il pezzo leggero: tempi spostati di "offset"
+                d["file"], d["offset"] = light[c["id"]][0], light[c["id"]][1]
             _save(os.path.join(PROP, hashlib.md5((src + nm).encode()).hexdigest()[:12] + ".json"), d)
     except Exception:
         pass
@@ -193,10 +195,11 @@ def compare_edit(prop, snap):
 
 
 def compare_clip(prop, snap):
-    items = _main_items(snap, prop["src"])
+    items = _main_items(snap, prop.get("file") or prop["src"])
     if not items:
         return None
-    rng = _src_ranges(items)
+    off = prop.get("offset", 0.0) if prop.get("file") else 0.0
+    rng = [(a + off, b + off, s, e) for a, b, s, e in _src_ranges(items)]
     a, b = min(r[0] for r in rng), max(r[1] for r in rng)
     words = _words(prop["src"])
     res = {"kind": "clip", "seq": prop["seq"], "time": time.time(), "trim_start": a - prop["start"], "trim_end": b - prop["end"],

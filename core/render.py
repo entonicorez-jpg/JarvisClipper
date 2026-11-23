@@ -57,9 +57,9 @@ def render(path, info, layout, start, end, out, preview=False, censor=None):
     args = ["-y", "-hide_banner", "-loglevel", "error", "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", path] + extra_in
     args += ["-filter_complex", fg, "-map", "[v]"] + amap + afilt
     if preview:
-        args += ["-r", "30", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-c:a", "aac", "-b:a", "96k"]
+        args += ["-r", "30"] + media.venc("preview") + ["-c:a", "aac", "-b:a", "96k"]
     else:
-        args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac", "-b:a", "192k"]
+        args += media.venc("high") + ["-c:a", "aac", "-b:a", "192k"]
     args += ["-movflags", "+faststart", out]
     os.makedirs(os.path.dirname(out), exist_ok=True)
     r = media.run(args)

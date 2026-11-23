@@ -41,6 +41,10 @@ def _load(lang, out):
     return tr
 
 
+# contesto per Whisper: parlato veloce e informale di una live, con parolacce e inglesismi del gaming
+PROMPT = {"it": "Live di uno streamer italiano che parla veloce e in modo informale, con parole inglesi del gaming."}
+
+
 def _clean(words):
     out = []
     n = len(words)
@@ -82,7 +86,8 @@ def run(job_path, out):
             if len(audio) > 3200:
                 segs, _ = tr.model.transcribe(audio, language=lang, word_timestamps=True, beam_size=5,
                                               vad_filter=True, vad_parameters={"min_silence_duration_ms": 300, "speech_pad_ms": 120},
-                                              condition_on_previous_text=False, no_speech_threshold=0.5)
+                                              condition_on_previous_text=False, no_speech_threshold=0.5,
+                                              initial_prompt=PROMPT.get(lang))
                 part = []
                 for s in segs:
                     for w in s.words or []:
@@ -90,7 +95,7 @@ def run(job_path, out):
                         if txt and getattr(w, "probability", 1.0) > 0.08:
                             part.append({"w": txt, "s": round(t + w.start, 3), "e": round(t + w.end, 3)})
                 words += part
-                sidecar.save(path, [{"words": part}], t, t + d)
+                sidecar.save(path, [{"words": part}], t, t + d, hq=bool(tr.gpu))
             done += d
             t += d
     words = _clean(words)

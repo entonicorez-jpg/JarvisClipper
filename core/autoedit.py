@@ -409,8 +409,7 @@ def _encode(path, info, cam, ed, a, b, lv, kind, out, W, H, preview, with_audio=
     args = ["-y", "-hide_banner", "-loglevel", "error", "-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", path] + extra_in
     args += ["-vf", vf, "-map", "0:v"]
     args += (afilt + amap + ["-c:a", "aac", "-b:a", "96k" if preview else "192k"]) if with_audio else ["-an"]
-    args += ["-r", f"{fps:.5f}", "-c:v", "libx264", "-preset", "ultrafast" if preview else "veryfast",
-             "-crf", "26" if preview else "18", "-f", "mpegts" if out.endswith(".ts") else "mp4", out]
+    args += ["-r", f"{fps:.5f}"] + media.venc("preview" if preview else "high") + ["-f", "mpegts" if out.endswith(".ts") else "mp4", out]
     r = media.run(args)
     if r.returncode != 0:
         raise RuntimeError("Errore nel render: " + r.stderr[-400:])

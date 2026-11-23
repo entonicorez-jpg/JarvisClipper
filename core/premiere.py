@@ -17,7 +17,9 @@ def path_url(p):
     return "file://localhost" + quote(p, safe="/:")
 
 
-def build_xml(clips, src, info, layout, rendered, out_xml, folder="Jarvis Clipper"):
+def build_xml(clips, src, info, layout, rendered, out_xml, folder="Jarvis Clipper", light=None):
+    """light = {id clip: (file, offset, durata)}: pezzo leggero della VOD (frame rate costante, keyframe
+    frequenti) da usare al posto della VOD intera: la preview e l'export di FilmCraft vanno molto più fluidi."""
     from .media import edit_rate
     fps, tb, ntsc = edit_rate(info)
     ntsc = "TRUE" if ntsc else "FALSE"
@@ -93,6 +95,11 @@ def build_xml(clips, src, info, layout, rendered, out_xml, folder="Jarvis Clippe
     for c in clips:
         a, b = F(c["start"]), F(c["end"])
         d = b - a
+        csrc, cfid, cname, cframes = src, "src", src_name, src_frames
+        if light and c["id"] in light:
+            lp, off, ldur = light[c["id"]]
+            csrc, cfid, cname, cframes = lp, f"lt{c['id']}", os.path.basename(lp), F(ldur)
+            a = F(c["start"] - off); b = a + d
         nm = f"Clip {c['id']:02d} - {c['score']} - {c.get('title', '')}"[:80]
         x.append(f"<sequence><name>{escape(nm)}</name>{rate}<duration>{d}</duration>"
                  f"<timecode>{rate}<string>00:00:00:00</string><frame>0</frame><displayformat>NDF</displayformat></timecode>"
@@ -102,8 +109,8 @@ def build_xml(clips, src, info, layout, rendered, out_xml, folder="Jarvis Clippe
 
         def vclip(cid, label, filt):
             return (f'<track><clipitem id="{cid}"><name>{escape(label)}</name><enabled>TRUE</enabled>'
-                    f"<duration>{src_frames}</duration>{rate}<start>0</start><end>{d}</end><in>{a}</in><out>{b}</out>"
-                    + file_el("src", src, src_name, src_frames, sw, sh) + filt + "</clipitem></track>")
+                    f"<duration>{cframes}</duration>{rate}<start>0</start><end>{d}</end><in>{a}</in><out>{b}</out>"
+                    + file_el(cfid, csrc, cname, cframes, sw, sh) + filt + "</clipitem></track>")
         bgmode = cam_h and layout.get("mode") == "bg"
         if bgmode:
             # sfondo: il gioco ingrandito e sfumato dietro la cam (sotto al gioco, che ne copre il resto)
@@ -123,9 +130,9 @@ def build_xml(clips, src, info, layout, rendered, out_xml, folder="Jarvis Clippe
         if info.get("has_audio", True):
             # una sola traccia stereo (non sinistra/destra separate)
             x.append(('<track premiereTrackType="Stereo">' if info.get("ch", 2) >= 2 else "<track>")
-                     + f'<clipitem id="a{c["id"]}"><name>{escape(src_name)}</name><enabled>TRUE</enabled>'
-                     f"<duration>{src_frames}</duration>{rate}<start>0</start><end>{d}</end><in>{a}</in><out>{b}</out>"
-                     + file_el("src", src, src_name, src_frames, sw, sh)
+                     + f'<clipitem id="a{c["id"]}"><name>{escape(cname)}</name><enabled>TRUE</enabled>'
+                     f"<duration>{cframes}</duration>{rate}<start>0</start><end>{d}</end><in>{a}</in><out>{b}</out>"
+                     + file_el(cfid, csrc, cname, cframes, sw, sh)
                      + "<sourcetrack><mediatype>audio</mediatype><trackindex>1</trackindex></sourcetrack>"
                      "</clipitem></track>")
         x.append("</audio></media></sequence>")
