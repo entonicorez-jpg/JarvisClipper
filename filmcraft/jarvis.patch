@@ -11,10 +11,72 @@ index a4b12bc..274c4d9 100644
   "log",
   "roxmltree",
 diff --git a/apps/filmcraft/src/main.rs b/apps/filmcraft/src/main.rs
-index f6e64ea..77bbf39 100644
+index f6e64ea..fbe9699 100644
 --- a/apps/filmcraft/src/main.rs
 +++ b/apps/filmcraft/src/main.rs
-@@ -341,6 +341,7 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
+@@ -66,6 +66,53 @@ fn app_icon() -> egui::IconData {
+ /// Print `text` (stdout, or stderr for an error). A Windows release build has no console
+ /// (`windows_subsystem = "windows"`), so there it is also shown in a message box: otherwise `--help`
+ /// would print nothing and a bad option would quit without a word.
++/// Jarvis: la cartella dei progetti (D:\\Progetti FilmCraft, o Documenti se non c'è il disco D:),
++/// creata con l'icona di FilmCraft.
++pub(crate) fn jarvis_projects_dir() -> std::path::PathBuf {
++    let base = if cfg!(windows) && std::path::Path::new("D:\\").is_dir() {
++        std::path::PathBuf::from("D:\\")
++    } else {
++        std::env::var_os("USERPROFILE")
++            .or_else(|| std::env::var_os("HOME"))
++            .map(|h| std::path::PathBuf::from(h).join("Documents"))
++            .unwrap_or_else(std::env::temp_dir)
++    };
++    let dir = base.join("Progetti FilmCraft");
++    let _ = std::fs::create_dir_all(&dir);
++    dir
++}
++
++/// Jarvis (Windows): icona della cartella dei progetti e apertura dei .fcproj con FilmCraft Jarvis.
++fn jarvis_windows_setup() {
++    #[cfg(windows)]
++    std::thread::spawn(|| {
++        use std::os::windows::process::CommandExt;
++        let Ok(exe) = std::env::current_exe() else { return };
++        let exe = exe.to_string_lossy().to_string();
++        let run = |prog: &str, args: &[&str]| {
++            let _ = std::process::Command::new(prog).args(args).creation_flags(0x0800_0000).status();
++        };
++        // icona della cartella (desktop.ini nascosto + cartella "di sistema" perché Esplora lo legga)
++        let dir = jarvis_projects_dir();
++        let ini = dir.join("desktop.ini");
++        let want = format!("[.ShellClassInfo]\r\nIconResource={exe},0\r\nIconFile={exe}\r\nIconIndex=0\r\nInfoTip=Progetti di FilmCraft Jarvis\r\n");
++        if std::fs::read_to_string(&ini).ok().as_deref() != Some(want.as_str()) {
++            let i = ini.to_string_lossy().to_string();
++            run("attrib", &["-h", "-s", &i]);
++            let _ = std::fs::write(&ini, &want);
++            run("attrib", &["+h", "+s", &i]);
++            run("attrib", &["+r", &dir.to_string_lossy()]);
++        }
++        // doppio clic su un .fcproj = si apre in FilmCraft Jarvis (solo per questo utente)
++        let cmd = format!("\"{exe}\" \"%1\"");
++        let icon = format!("{exe},0");
++        run("reg", &["add", "HKCU\\Software\\Classes\\.fcproj", "/ve", "/d", "FilmCraftJarvis.Project", "/f"]);
++        run("reg", &["add", "HKCU\\Software\\Classes\\FilmCraftJarvis.Project", "/ve", "/d", "Progetto FilmCraft", "/f"]);
++        run("reg", &["add", "HKCU\\Software\\Classes\\FilmCraftJarvis.Project\\DefaultIcon", "/ve", "/d", &icon, "/f"]);
++        run("reg", &["add", "HKCU\\Software\\Classes\\FilmCraftJarvis.Project\\shell\\open\\command", "/ve", "/d", &cmd, "/f"]);
++    });
++}
++
+ fn tell(text: &str, error: bool) {
+     if error {
+         eprint!("{text}");
+@@ -80,6 +127,7 @@ fn tell(text: &str, error: bool) {
+ }
+ 
+ fn main() -> eframe::Result {
++    jarvis_windows_setup();
+     // Windows: the update helper is a copy of this program started with `--finish-update`.
+     #[cfg(windows)]
+     if let Some(result) = craft_update::self_update::finish(&filmcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+@@ -341,6 +389,7 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
          // voice-over recording reads the microphone through cpal
          session.voiceover.input = Some(Box::new(audio_in::CpalIn::new(&session.prefs.audio_hardware.device_class)));
          let (project, media) = args::project_and_media(&files);
@@ -22,7 +84,7 @@ index f6e64ea..77bbf39 100644
          if let Some(p) = project {
              if let Err(e) = session.execute("file.open", json!({"path": p})) {
                  log::error!("{e}");
-@@ -355,11 +356,12 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
+@@ -355,11 +404,12 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
                      }
                  }
                  None => {
@@ -37,7 +99,7 @@ index f6e64ea..77bbf39 100644
              let _ = session.execute("file.openDemoProject", json!({}));
          }
          if !media.is_empty() {
-@@ -372,8 +374,14 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
+@@ -372,8 +422,14 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
                  Err(e) => log::error!("recovery failed: {e}"),
              }
          }
@@ -53,6 +115,31 @@ index f6e64ea..77bbf39 100644
          app.graphics_notice = notice;
          if recover == Some(false) {
              app.dialog = None;
+@@ -410,6 +466,7 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
+         app.hooks.pick_save = Some(Box::new(|name: &str| {
+             rfd::FileDialog::new()
+                 .add_filter(filmcraft_ui_egui::i18n::t("FilmCraft Project"), &file_filters::extensions(&["fcproj"]))
++                .set_directory(jarvis_projects_dir())
+                 .set_file_name(name)
+                 .save_file()
+                 .map(|p| p.to_string_lossy().to_string())
+@@ -618,6 +675,7 @@ fn run_dialog_off_thread(dialog: filmcraft_ui_egui::native_dialogs::FileDialog)
+                 FileDialog::OpenFile { filter, exts } => rfd::FileDialog::new().add_filter(&filter, &exts).pick_file().map(path).into_iter().collect(),
+                 FileDialog::Relink { exts, .. } => rfd::FileDialog::new().add_filter(&media, &exts).pick_file().map(path).into_iter().collect(),
+                 FileDialog::OpenProject => rfd::FileDialog::new()
++                    .set_directory(jarvis_projects_dir())
+                     .add_filter(&project, &project_exts)
+                     // #1644: same "All files" fallback as the synchronous picker, so a
+                     // project hidden by an unregistered `.fcproj` MIME type stays openable.
+@@ -627,7 +685,7 @@ fn run_dialog_off_thread(dialog: filmcraft_ui_egui::native_dialogs::FileDialog)
+                     .into_iter()
+                     .collect(),
+                 FileDialog::SaveProject { name } => {
+-                    rfd::FileDialog::new().add_filter(&project, &project_exts).set_file_name(name).save_file().map(path).into_iter().collect()
++                    rfd::FileDialog::new().add_filter(&project, &project_exts).set_directory(jarvis_projects_dir()).set_file_name(name).save_file().map(path).into_iter().collect()
+                 }
+                 FileDialog::SaveAs { filter, exts, name, .. } => {
+                     rfd::FileDialog::new().add_filter(&filter, &exts).set_file_name(name).save_file().map(path).into_iter().collect()
 diff --git a/crates/engine/Cargo.toml b/crates/engine/Cargo.toml
 index 306b661..bebd165 100644
 --- a/crates/engine/Cargo.toml
