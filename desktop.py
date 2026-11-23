@@ -21,6 +21,7 @@ def main():
     port = free_port()
     srv = make_server("127.0.0.1", port, jarvis.app, threaded=True)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
+    jarvis.start_learner()
     win = webview.create_window("Jarvis Clipper", f"http://127.0.0.1:{port}/", width=1440, height=920,
                                 min_size=(1000, 680), background_color="#0b0d10")
     jarvis.WINDOW = win

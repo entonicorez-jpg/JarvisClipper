@@ -296,10 +296,10 @@ index 44399e4..f4606e8 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..d44e792
+index 0000000..177bcaf
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,1766 @@
+@@ -0,0 +1,1825 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -2066,6 +2066,65 @@ index 0000000..d44e792
 +    s.state.selection = vec![clip].into_iter().collect();
 +    Ok(json!({"clip": clip.0}))
 +}
++
++/// Jarvis impara dal montaggio: la fotografia delle sequenze di Jarvis (nome con "Jarvis" o "Clip NN")
++/// come le ha lasciate l'utente. Jarvis Clipper la confronta con quello che aveva proposto.
++pub fn learn_snapshot(s: &Session) -> Vec<(String, Value)> {
++    use filmcraft_project::ItemKind as K;
++    let pr = &s.project;
++    let mut out = Vec::new();
++    for qi in pr.sequences() {
++        let nm = &qi.name;
++        let low = nm.to_lowercase();
++        if !(low.contains("jarvis") || low.starts_with("clip ")) {
++            continue;
++        }
++        let Some(q) = qi.as_sequence() else { continue };
++        let mut tracks = Vec::new();
++        for (kind, list) in [("V", &q.video_tracks), ("A", &q.audio_tracks)] {
++            for (i, tr) in list.iter().enumerate() {
++                let mut items = Vec::new();
++                for it in &tr.items {
++                    let (k, path) = match pr.item(it.item).map(|x| &x.kind) {
++                        Some(K::AdjustmentLayer { .. }) => ("adjust", None),
++                        Some(K::Sequence(_)) => ("seq", None),
++                        _ => match pr.resolve_media(it.item) {
++                            Some((_, m, _)) => match &m.media {
++                                filmcraft_project::MediaRef::File { path } => ("media", Some(path.clone())),
++                                _ => ("generator", None),
++                            },
++                            None => ("other", None),
++                        },
++                    };
++                    let k = if it.graphic.is_some() { "graphic" } else { k };
++                    // lo zoom più forte dentro la clip (Movimento o Trasforma)
++                    let mut zoom: f64 = 0.0;
++                    let mut fx = Vec::new();
++                    for e in &it.effects {
++                        fx.push(e.effect.clone());
++                        for (_, p) in e.params.iter().filter(|(k, _)| k.contains("scale") && !k.contains("uniform")) {
++                            for j in 0..=8 {
++                                let t = it.source_in + Tick((it.duration.0 as f64 * j as f64 / 8.0 * it.speed.abs().max(0.01)) as i64);
++                                let v = p.f64_at(t);
++                                if v.is_finite() {
++                                    zoom = zoom.max(v);
++                                }
++                            }
++                        }
++                    }
++                    items.push(json!({"name": it.name, "kind": k, "path": path, "start": it.start.seconds(), "end": it.end().seconds(),
++                                      "in": it.source_in.seconds(), "speed": it.speed, "enabled": it.enabled,
++                                      "zoom": if zoom > 0.0 { Some(zoom) } else { None }, "fx": fx}));
++                }
++                tracks.push(json!({"name": format!("{kind}{}", i + 1), "items": items}));
++            }
++        }
++        let key: String = format!("{}_{}", qi.id.0, nm).chars().map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).take(90).collect();
++        out.push((key, json!({"sequence": nm, "id": qi.id.0, "width": q.settings.width, "height": q.settings.height, "tracks": tracks,
++                               "markers": q.markers.iter().map(|m| json!({"time": m.start.seconds(), "name": m.name})).collect::<Vec<_>>()})));
++    }
++    out
++}
 diff --git a/crates/engine/src/lib.rs b/crates/engine/src/lib.rs
 index cead3c7..3d04cce 100644
 --- a/crates/engine/src/lib.rs
@@ -3518,10 +3577,10 @@ index 0000000..9c8196e
 +}
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..45c00b6
+index 0000000..6911a92
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
-@@ -0,0 +1,993 @@
+@@ -0,0 +1,1032 @@
 +//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
 +
 +use serde_json::{Value, json};
@@ -3641,6 +3700,7 @@ index 0000000..45c00b6
 +    update_banner(app, ctx);
 +    poll_captions(app, ctx);
 +    crate::jarvis_assist::poll(app, ctx);
++    learn_snapshot(app);
 +    composer_drag(app, ctx);
 +    if !app.jarvis_ui.presets_checked {
 +        app.jarvis_ui.presets_checked = true;
@@ -4514,6 +4574,44 @@ index 0000000..45c00b6
 +        }
 +    }
 +    out
++}
++
++/// Jarvis impara: ogni 20 secondi, se le sequenze di Jarvis sono cambiate, le scrive in
++/// %LOCALAPPDATA%\\JarvisClipper\\impara\\filmcraft (Jarvis Clipper le confronta con le sue proposte).
++fn learn_snapshot(app: &FilmcraftApp) {
++    use std::sync::Mutex;
++    static LAST: Mutex<Option<(std::time::Instant, std::collections::HashMap<String, u64>)>> = Mutex::new(None);
++    let Ok(mut g) = LAST.lock() else { return };
++    let now = std::time::Instant::now();
++    if let Some((t, _)) = g.as_ref() {
++        if now.duration_since(*t).as_secs() < 20 {
++            return;
++        }
++    }
++    let mut seen = g.take().map(|(_, m)| m).unwrap_or_default();
++    *g = Some((now, std::collections::HashMap::new()));
++    let Some(base) = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from) else {
++        *g = Some((now, seen));
++        return;
++    };
++    let dir = base.join("JarvisClipper").join("impara").join("filmcraft");
++    for (key, v) in filmcraft_engine::jarvis::learn_snapshot(&app.session) {
++        let txt = v.to_string();
++        let h = {
++            use std::hash::{Hash, Hasher};
++            let mut st = std::collections::hash_map::DefaultHasher::new();
++            txt.hash(&mut st);
++            st.finish()
++        };
++        if seen.get(&key) == Some(&h) {
++            continue;
++        }
++        let _ = std::fs::create_dir_all(&dir);
++        if std::fs::write(dir.join(format!("{key}.json")), txt).is_ok() {
++            seen.insert(key, h);
++        }
++    }
++    *g = Some((now, seen));
 +}
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
 index c3fb34a..1a00364 100644

@@ -418,6 +418,13 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
     <div style="color:var(--mut);font-size:13px;margin:4px 0">Nell'editor dici o scrivi come vuoi il video e Gemini fa tagli e zoom. La chiave è gratis su <b>aistudio.google.com</b> → "Get API key".</div>
     <label>Chiave API Gemini <span id="cGemOk" style="color:var(--acc);font-weight:700"></span> <input type="password" id="cGem" placeholder="AIza… (lascia vuoto per non cambiarla)"></label>
   </div>
+  <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
+    <b>🧠 Jarvis impara dal tuo montaggio</b>
+    <div style="color:var(--mut);font-size:13px;margin:4px 0">Quando correggi in FilmCraft Jarvis le clip e i montaggi che ti manda, Jarvis guarda cosa togli, cosa rimetti e come cambi tagli e zoom. Dalle volte dopo fa già così (e lo dice anche a Gemini).</div>
+    <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="cImpara" style="width:auto"> Impara dalle mie correzioni</label>
+    <div id="imparaInfo" style="font-size:13px;margin:6px 0">…</div>
+    <button class="sm" onclick="imparaReset()">Dimentica tutto e ricomincia</button>
+  </div>
   <label>Secondi prima del picco <input type="number" id="cPre"></label>
   <label>Secondi dopo il picco <input type="number" id="cPost"></label>
   <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:14px">
@@ -753,7 +760,7 @@ async function openFolder(){await api(`/api/project/${PID}/open`,{})}
 
 /* ---------- impostazioni ---------- */
 async function openCfg(){const c=await api('/api/config');window.CFG=c;$('#cKey').value='';$('#cKey').placeholder=c.api_key_set?'chiave salvata ✓ (scrivi per sostituirla)':'sk-ant-…';
-  $('#cGem').value='';$('#cGemOk').textContent=c.gemini_key_set?'✓ salvata':'';$('#cGem').placeholder=c.gemini_key_set?'chiave salvata ✓ (scrivi per sostituirla)':'AIza… (gratis su aistudio.google.com)';
+  $('#cImpara').checked=c.impara!==false;imparaLoad();$('#cGem').value='';$('#cGemOk').textContent=c.gemini_key_set?'✓ salvata':'';$('#cGem').placeholder=c.gemini_key_set?'chiave salvata ✓ (scrivi per sostituirla)':'AIza… (gratis su aistudio.google.com)';
   $('#cModel').value=c.ai_model;$('#cPre').value=c.pre;$('#cPost').value=c.post;$('#cfg').classList.add('on');gpuRefresh()}
 function closeCfg(){$('#cfg').classList.remove('on');clearInterval(window.gpuT)}
 async function gpuRefresh(){const g=await api('/api/gpu');
@@ -761,7 +768,10 @@ async function gpuRefresh(){const g=await api('/api/gpu');
   $('#gpuBtn').disabled=g.running||g.installed;$('#gpuBtn').style.display=(g.nvidia||g.installed||g.running)?'':'none';
   $('#gpuBar').style.width=(g.progress*100)+'%';return g}
 async function gpuInstall(){await api('/api/gpu',{});clearInterval(window.gpuT);window.gpuT=setInterval(async()=>{const g=await gpuRefresh();if(!g.running)clearInterval(window.gpuT)},1000)}
-async function saveCfg(){const b={ai_model:$('#cModel').value,pre:+$('#cPre').value,post:+$('#cPost').value};if($('#cKey').value)b.api_key=$('#cKey').value.trim();if($('#cGem').value)b.gemini_key=$('#cGem').value.trim();window.CFG=await api('/api/config',b);closeCfg();aiStatus()}
+async function imparaLoad(r){const d=await api('/api/impara',r||{});const n=d.n_edit+d.n_clip;
+  $('#imparaInfo').innerHTML=n?`Ha imparato da <b>${d.n_edit}</b> montaggi e <b>${d.n_clip}</b> clip che hai corretto.`+(d.lines.length?'<ul style="margin:6px 0 0 18px;padding:0">'+d.lines.slice(0,8).map(x=>'<li>'+x.replace(/</g,'&lt;')+'</li>').join('')+'</ul>':''):'Ancora niente: esporta in FilmCraft, correggi come piace a te e salva. Jarvis se ne accorge da solo.'}
+async function imparaReset(){if(!confirm('Vuoi che Jarvis dimentichi tutto quello che ha imparato dal tuo montaggio?'))return;imparaLoad({reset:true})}
+async function saveCfg(){const b={impara:$('#cImpara').checked,ai_model:$('#cModel').value,pre:+$('#cPre').value,post:+$('#cPost').value};if($('#cKey').value)b.api_key=$('#cKey').value.trim();if($('#cGem').value)b.gemini_key=$('#cGem').value.trim();window.CFG=await api('/api/config',b);closeCfg();aiStatus()}
 async function clearKey(){window.CFG=await api('/api/config',{api_key:'',gemini_key:''});closeCfg();aiStatus()}
 
 

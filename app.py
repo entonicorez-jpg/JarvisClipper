@@ -7,7 +7,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory, abort
 FROZEN = getattr(sys, "frozen", False)
 BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))  # file dell'app (sola lettura)
 sys.path.insert(0, BASE)
-from core import media, analyze, render, premiere, gpu, autoedit, updater, kdenlive, filmcraft, layout as lay  # noqa: E402
+from core import media, analyze, render, premiere, gpu, autoedit, updater, kdenlive, filmcraft, impara, layout as lay  # noqa: E402
 
 # dati scrivibili: accanto allo script, oppure in %LOCALAPPDATA%\JarvisClipper se è l'app installata
 DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "JarvisClipper") if FROZEN else BASE
@@ -19,7 +19,7 @@ os.makedirs(PROJ_DIR, exist_ok=True)
 os.makedirs(USER_DIR, exist_ok=True)
 
 DEFAULT_CFG = {"api_key": "", "ai_model": "claude-sonnet-5-5", "gemini_key": "", "gemini_model": "", "ai_video": False,
-               "ai_prompts": [], "model": "small", "max_clips": 15,
+               "ai_prompts": [], "impara": True, "model": "small", "max_clips": 15,
                "split": 0.4, "min_len": 15, "max_len": 59, "pre": 14, "post": 8, "lang": "it"}
 
 app = Flask(__name__, static_folder=os.path.join(BASE, "static"))
@@ -269,6 +269,12 @@ def job_analyze(pid, opts):
     for cl in clips:
         cl["selected"] = cl["score"] >= 60
         cl["preview"] = None
+    if c.get("impara", True):
+        try:
+            impara.learn()
+            clips = impara.apply_clips(clips, p["info"]["dur"], lambda m: set_job(pid, log=m))
+        except Exception as e:
+            set_job(pid, log=f"Stile imparato non applicato: {e}")
     update(pid, clips=clips, status="clips", layout_ver=p.get("layout_ver", 0))
     set_job(pid, log=f"Trovate {len(clips)} clip")
     render_previews(pid, 0.9)
@@ -331,6 +337,7 @@ def job_export(pid, ids, do_render, to_filmcraft=False):
     premiere.build_xml(sel, p["src_path"], p["info"], p["layout"], rendered, xml, folder=folder)
     opened = False
     if to_filmcraft:
+        impara.save_clips_proposal(p["src_path"], sel)
         try:
             opened = filmcraft.open_xml(xml)
         except Exception as e:
@@ -355,6 +362,12 @@ def job_edit_analyze(pid, opts):
     ed = autoedit.analyze_edit(p["src_path"], p["info"], cam, opts, load_half(pid),
                                lambda f, m: set_job(pid, progress=f, msg=m),
                                lambda m: set_job(pid, log=m), lambda: stopped(pid))
+    if cfg().get("impara", True):
+        try:
+            impara.learn()
+            ed = impara.apply_edit(ed, lambda m: set_job(pid, log=m))
+        except Exception as e:
+            set_job(pid, log=f"Stile imparato non applicato: {e}")
     update(pid, edit=ed, status="editor")
     prompt = (opts.get("ai_prompt") or "").strip()
     if prompt:
@@ -420,7 +433,9 @@ def job_edit_export(pid, premiere_xml, mp4, kden=False, fcraft=False):
             set_job(pid, log="XML Premiere: " + xml)
         if fcraft:
             fp_ = os.path.join(out, f"{base}_FILMCRAFT_{time.strftime('%H%M%S')}.xml")
-            premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, fp_, name=f"{base} - Jarvis {time.strftime('%H:%M')}",
+            seqn = f"{base} - Jarvis {time.strftime('%H:%M')}"
+            impara.save_edit_proposal(p["src_path"], ed, seqn)
+            premiere.build_autoedit_xml(ed, p["src_path"], p["info"], cam, fp_, name=seqn,
                                         fx=None if fc_adj else fx, bip=bip, flavor="filmcraft" if fc_adj else "premiere",
                                         folder=f"Jarvis {time.strftime('%H:%M')} - {base[:40]}")
             res["filmcraft"] = fp_
@@ -899,7 +914,33 @@ def files(pid, fname):
     return send_file(os.path.join(pdir(pid), os.path.basename(fname)), conditional=True)
 
 
+def start_learner():
+    """Jarvis impara dai montaggi corretti in FilmCraft: controlla ogni minuto."""
+    def loop():
+        while True:
+            try:
+                if cfg().get("impara", True):
+                    n = impara.learn(log=print)
+                    if n:
+                        print(f"Impara: {n} montaggi nuovi confrontati")
+            except Exception as e:
+                print("Impara:", e)
+            time.sleep(60)
+    threading.Thread(target=loop, daemon=True).start()
+
+
+@app.route("/api/impara", methods=["GET", "POST"])
+def api_impara():
+    if request.method == "POST":
+        if (request.get_json(silent=True) or {}).get("reset"):
+            impara.reset()
+        else:
+            impara.learn()
+    return jsonify(impara.summary())
+
+
 if __name__ == "__main__":
+    start_learner()
     port = 7865
     print(f"\n  JARVIS CLIPPER attivo su http://127.0.0.1:{port}\n  (chiudi questa finestra per spegnerlo)\n")
     if "--no-browser" not in sys.argv:

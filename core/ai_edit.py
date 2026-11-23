@@ -141,7 +141,7 @@ def plan(key, model, instructions, rs, re_, words, peaks, ed, video=None, log=pr
         parts.append({"file_data": {"file_uri": video[0], "mime_type": video[1]}})
         text = f"Il video allegato inizia al secondo {rs:.2f} del file (aggiungi {rs:.2f} ai tempi del video).\n\n" + text
     parts.append({"text": text})
-    body = {"system_instruction": {"parts": [{"text": SYSTEM}]},
+    body = {"system_instruction": {"parts": [{"text": SYSTEM + _stile("edit")}]},
             "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {"responseMimeType": "application/json", "responseSchema": SCHEMA, "temperature": 0.3}}
     last = None
@@ -236,3 +236,16 @@ def clean(res, rs, re_):
     if res.get("censor") is not None:
         censor = [{"s": float(c[0]), "e": float(c[1]), "w": "", "on": True} for c in res["censor"] if len(c) >= 2 and float(c[1]) > float(c[0])]
     return merged, zooms, censor, str(res.get("note", ""))[:600]
+
+
+def _stile(kind):
+    """Lo stile imparato dalle correzioni di Jake (vuoto se non c'è ancora o se è spento)."""
+    try:
+        from . import impara
+        import json as _j, os as _o
+        c = _o.path.join(_o.environ.get("LOCALAPPDATA", _o.path.expanduser("~")), "JarvisClipper", "config.json")
+        if _o.path.exists(c) and _j.load(open(c, encoding="utf-8")).get("impara", True) is False:
+            return ""
+        return impara.prompt_text(kind)
+    except Exception:
+        return ""

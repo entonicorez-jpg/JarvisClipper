@@ -41,7 +41,7 @@ def pick(cands, opts, max_clips, min_len, max_len, dur, log=print):
                      f"punteggio automatico {c['score']} · segnali: {sig or '-'}\n{ai_edit.words_text(words) or '(nessun parlato)'}")
     text = (f"RICHIESTA DI MRJAKE: {want or 'trovami i momenti più virali'}\n"
             f"Quante clip al massimo: {max_clips} · durata MIN {min_len:.0f} s, MAX {max_len:.0f} s\n\n" + "\n\n".join(parts))
-    body = {"system_instruction": {"parts": [{"text": SYSTEM}]},
+    body = {"system_instruction": {"parts": [{"text": SYSTEM + _stile("clips")}]},
             "contents": [{"role": "user", "parts": [{"text": text}]}],
             "generationConfig": {"responseMimeType": "application/json", "responseSchema": SCHEMA, "temperature": 0.4}}
     res, last = None, None
@@ -92,3 +92,16 @@ def pick(cands, opts, max_clips, min_len, max_len, dur, log=print):
     if not out:
         raise RuntimeError("Gemini non ha scelto nessuna clip")
     return out
+
+
+def _stile(kind):
+    """Lo stile imparato dalle correzioni di Jake (vuoto se non c'è ancora o se è spento)."""
+    try:
+        from . import impara
+        import json as _j, os as _o
+        c = _o.path.join(_o.environ.get("LOCALAPPDATA", _o.path.expanduser("~")), "JarvisClipper", "config.json")
+        if _o.path.exists(c) and _j.load(open(c, encoding="utf-8")).get("impara", True) is False:
+            return ""
+        return impara.prompt_text(kind)
+    except Exception:
+        return ""

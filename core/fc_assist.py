@@ -92,7 +92,7 @@ def run_assist(job_path, out):
     if not key:
         raise RuntimeError("Metti la chiave di Google Gemini in Jarvis Clipper › Impostazioni")
     text = f"RICHIESTA DI MRJAKE:\n{job['prompt'].strip()}\n\nTIMELINE:\n{_context_text(job.get('context') or {})}"
-    body = {"system_instruction": {"parts": [{"text": SYSTEM}]},
+    body = {"system_instruction": {"parts": [{"text": SYSTEM + _stile("fc")}]},
             "contents": [{"role": "user", "parts": [{"text": text}]}],
             "generationConfig": {"responseMimeType": "application/json", "responseSchema": SCHEMA, "temperature": 0.2, "maxOutputTokens": 16384}}
     last = None
@@ -156,3 +156,16 @@ def run_listen(stop_file, out):
     segs = tr.transcribe(wav, 0.0, max(1.0, dur + 1), 5 if getattr(tr, "gpu", False) else 1)
     json.dump({"text": " ".join(s["text"] for s in segs).strip()}, open(out, "w", encoding="utf-8"), ensure_ascii=False)
     return True
+
+
+def _stile(kind):
+    """Lo stile imparato dalle correzioni di Jake (vuoto se non c'è ancora o se è spento)."""
+    try:
+        from . import impara
+        import json as _j, os as _o
+        c = _o.path.join(_o.environ.get("LOCALAPPDATA", _o.path.expanduser("~")), "JarvisClipper", "config.json")
+        if _o.path.exists(c) and _j.load(open(c, encoding="utf-8")).get("impara", True) is False:
+            return ""
+        return impara.prompt_text(kind)
+    except Exception:
+        return ""
