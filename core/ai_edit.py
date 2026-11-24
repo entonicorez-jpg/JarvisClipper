@@ -76,17 +76,30 @@ SCHEMA = {
 def _req(url, key, data=None, headers=None, method=None, timeout=300):
     h = {"x-goog-api-key": key}
     h.update(headers or {})
-    r = urllib.request.Request(url, data=data, headers=h, method=method)
-    try:
-        with urllib.request.urlopen(r, timeout=timeout) as resp:
-            return resp.read(), dict(resp.headers)
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", "ignore")
+    # Gemini a volte è sovraccarico (503 "high demand") o limita (429): si riprova da solo, aspettando
+    waits = [4, 10, 25]
+    for k in range(len(waits) + 1):
+        r = urllib.request.Request(url, data=data, headers=h, method=method)
         try:
-            msg = json.loads(body)["error"]["message"]
-        except Exception:
-            msg = body[:300]
-        raise RuntimeError(f"Gemini: {msg}") from None
+            with urllib.request.urlopen(r, timeout=timeout) as resp:
+                return resp.read(), dict(resp.headers)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "ignore")
+            try:
+                msg = json.loads(body)["error"]["message"]
+            except Exception:
+                msg = body[:300]
+            if e.code in (429, 500, 502, 503, 504) and k < len(waits):
+                time.sleep(waits[k])
+                continue
+            if e.code in (429, 503) or "high demand" in msg.lower() or "overloaded" in msg.lower():
+                msg = f"in questo momento è sovraccarico, ho riprovato più volte: riprova tra qualche minuto ({msg[:80]})"
+            raise RuntimeError(f"Gemini: {msg}") from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            if k < len(waits):
+                time.sleep(waits[k])
+                continue
+            raise RuntimeError(f"Gemini non raggiungibile: {e}") from None
 
 
 def upload_video(path, key, log=print):
@@ -156,7 +169,7 @@ def plan(key, model, instructions, rs, re_, words, peaks, ed, video=None, log=pr
         except RuntimeError as e:
             last = e
             low = str(e).lower()
-            if any(k in low for k in ("not found", "not supported", "no longer available", "deprecated", "is not available", "not available to new")):
+            if any(k in low for k in ("not found", "not supported", "no longer available", "deprecated", "is not available", "not available to new", "high demand", "overloaded", "unavailable", "try again")):
                 log(f"Modello {m} non disponibile, provo il prossimo")
                 continue
             raise

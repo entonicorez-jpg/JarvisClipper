@@ -55,7 +55,7 @@ def pick(cands, opts, max_clips, min_len, max_len, dur, log=print):
             break
         except RuntimeError as e:
             last = e
-            if any(k in str(e).lower() for k in ("not found", "not supported", "no longer available", "deprecated", "not available")):
+            if any(k in str(e).lower() for k in ("not found", "not supported", "no longer available", "deprecated", "not available", "high demand", "overloaded", "unavailable", "try again")):
                 continue
             raise
     if res is None:

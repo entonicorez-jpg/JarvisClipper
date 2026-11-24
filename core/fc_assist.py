@@ -129,7 +129,7 @@ def run_assist(job_path, out):
         except RuntimeError as e:
             last = e
             low = str(e).lower()
-            if any(k in low for k in ("not found", "not supported", "no longer available", "deprecated", "not available")):
+            if any(k in low for k in ("not found", "not supported", "no longer available", "deprecated", "not available", "high demand", "overloaded", "unavailable", "try again")):
                 continue
             break
         except Exception as e:
