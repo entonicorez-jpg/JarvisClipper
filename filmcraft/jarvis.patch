@@ -4091,10 +4091,10 @@ index 0000000..9c8196e
 +}
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..9e052c7
+index 0000000..1afcd00
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
-@@ -0,0 +1,1137 @@
+@@ -0,0 +1,1140 @@
 +//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
 +
 +use serde_json::{Value, json};
@@ -5143,8 +5143,11 @@ index 0000000..9e052c7
 +    if ui.add_enabled(!vids.is_empty(), egui::Button::new("🎥 Stabilizza (video mosso)")).on_hover_text("Aggiunge Warp Stabilizer alle clip video selezionate: la prima volta analizza il movimento").clicked() {
 +        run = Some(("effects.apply", json!({"clips": vids, "effect": "warp_stabilizer"})));
 +    }
-+    if ui.button("🪄 Morph Cut sul taglio vicino all'indicatore").on_hover_text("Fonde i due pezzi di un taglio a metà frase, così il jump cut non si nota").clicked() {
-+        run = Some(("jarvis.transition", json!({"preset": "morph", "scope": "playhead", "sfx": false})));
++    // più clip selezionate: tutti i tagli tra loro; se no il taglio vicino all'indicatore
++    let many = vids.len() >= 2;
++    let label = if many { format!("🪄 Morph Cut su tutti i tagli delle {} clip selezionate", vids.len()) } else { "🪄 Morph Cut sul taglio vicino all'indicatore".to_string() };
++    if ui.button(label).on_hover_text("Fonde i due pezzi di un taglio a metà frase, così il jump cut non si nota").clicked() {
++        run = Some(("jarvis.transition", json!({"preset": "morph", "scope": if many { "selection" } else { "playhead" }, "sfx": false})));
 +    }
 +    let busy = app.jarvis_ui.sep.is_some();
 +    if ui.add_enabled(!busy, egui::Button::new("⚡ Preview fluida (proxy leggeri di Jarvis)")).on_hover_text("Se la preview lagga: Jarvis crea copie leggere dei video (selezionati, o tutti) e la preview usa quelle. L'export resta con gli originali.").clicked() {
@@ -5161,7 +5164,7 @@ index 0000000..9e052c7
 +    }
 +    if let Some((cmd, p)) = run {
 +        match crate::menus::invoke(app, ctx, cmd, p) {
-+            Ok(_) => app.ui.status = if cmd == "effects.apply" { "✅ Stabilizzatore aggiunto (in Controlli effetti puoi regolarlo)".into() } else { "✅ Morph Cut messo".into() },
++            Ok(v) => app.ui.status = if cmd == "effects.apply" { "✅ Stabilizzatore aggiunto (in Controlli effetti puoi regolarlo)".into() } else { format!("✅ Morph Cut messo su {} tagli", v["transitions"].as_u64().unwrap_or(0)) },
 +            Err(e) => app.ui.status = format!("⚠ {e}"),
 +        }
 +        ui.close();
