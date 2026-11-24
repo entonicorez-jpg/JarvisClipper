@@ -296,10 +296,10 @@ index 44399e4..f4606e8 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..1436033
+index 0000000..1011d2e
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,2034 @@
+@@ -0,0 +1,2137 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -1023,12 +1023,19 @@ index 0000000..1436033
 +    ("c_slide_up", "Slide ↑"),
 +    ("c_slide_down", "Slide ↓"),
 +    ("c_whip", "Whip veloce"),
-+    ("c_glitch", "Glitch RGB"),
++    ("c_zoom_out", "Zoom Out"),
++    ("c_spin", "Giro 180°"),
++    ("c_flash", "Flash + zoom"),
++    ("c_blur", "Sfocatura"),
++    ("c_stretch", "Stiramento"),
++    ("c_flip", "Carta (flip)"),
++    ("c_bounce", "Rimbalzo"),
++    ("c_glitch", "Glitch"),
 +    ("c_impact", "Impatto (shake)"),
 +    ("c_mix", "🎲 Mix Composer"),
 +];
 +
-+const C_MIX: &[&str] = &["c_zoom_in", "c_slide_left", "c_zoom_spin", "c_slide_up", "c_whip", "c_slide_right"];
++const C_MIX: &[&str] = &["c_zoom_in", "c_slide_left", "c_zoom_spin", "c_flash", "c_slide_up", "c_whip", "c_zoom_out", "c_slide_right", "c_spin"];
 +
 +fn kf(p: &mut Param, t: Tick, v: ParamValue, interp: Interpolation) {
 +    p.put_keyframe(t, v);
@@ -1057,6 +1064,8 @@ index 0000000..1436033
 +}
 +
 +fn composer_one(it: &mut filmcraft_project::TrackItem, preset: &str, side_a: bool, n: Tick, w: f64, h: f64) {
++    // Tutte fatte con effetti che la scheda video disegna da sola (Trasformazione senza otturatore,
++    // Offset, sfocature, luminosità): leggere in anteprima e nell'export.
 +    let dur = it.duration;
 +    let base = it.source_in;
 +    let c = Vec2::new(w / 2.0, h / 2.0);
@@ -1071,23 +1080,90 @@ index 0000000..1436033
 +            it.effects.push(e);
 +        }
 +    };
-+    match preset {
-+        "c_zoom_in" | "c_zoom_spin" => {
-+            let Some(mut e) = fx_instance("transform") else { return };
-+            e.params.insert("position".into(), Param::new(ParamValue::Vec2(c)));
-+            e.params.insert("anchor".into(), Param::new(ParamValue::Vec2(c)));
-+            e.params.insert("shutter_override".into(), Param::new(ParamValue::Bool(true)));
-+            e.params.insert("shutter_angle".into(), Param::new(f(360.0)));
-+            let mut sc = Param::new(f(100.0));
-+            if side_a { anim(&mut sc, true, base, dur, n, f(100.0), f(320.0)) } else { anim(&mut sc, false, base, dur, n, f(320.0), f(100.0)) }
-+            e.params.insert("scale_height".into(), sc.clone());
-+            e.params.insert("scale_width".into(), sc);
-+            if preset == "c_zoom_spin" {
-+                let mut r = Param::new(f(0.0));
-+                if side_a { anim(&mut r, true, base, dur, n, f(0.0), f(35.0)) } else { anim(&mut r, false, base, dur, n, f(-35.0), f(0.0)) }
-+                e.params.insert("rotation".into(), r);
-+            }
++    let gblur = |it: &mut filmcraft_project::TrackItem, peak: f64| {
++        if let Some(mut e) = fx_instance("gaussian_blur") {
++            let mut l = Param::new(f(0.0));
++            anim(&mut l, side_a, base, dur, n, f(if side_a { 0.0 } else { peak }), f(if side_a { peak } else { 0.0 }));
++            e.params.insert("blurriness".into(), l);
++            e.params.insert("repeat_edge".into(), Param::new(ParamValue::Bool(true)));
 +            it.effects.push(e);
++        }
++    };
++    // Trasformazione: scala (larghezza/altezza) e rotazione da/a, senza otturatore (la fa la GPU)
++    let xform = |it: &mut filmcraft_project::TrackItem, sw: (f64, f64), sh: (f64, f64), rot: (f64, f64)| {
++        let Some(mut e) = fx_instance("transform") else { return };
++        e.params.insert("position".into(), Param::new(ParamValue::Vec2(c)));
++        e.params.insert("anchor".into(), Param::new(ParamValue::Vec2(c)));
++        e.params.insert("uniform_scale".into(), Param::new(ParamValue::Bool(false)));
++        let mut a = Param::new(f(100.0));
++        anim(&mut a, side_a, base, dur, n, f(sw.0), f(sw.1));
++        let mut b = Param::new(f(100.0));
++        anim(&mut b, side_a, base, dur, n, f(sh.0), f(sh.1));
++        e.params.insert("scale_width".into(), a);
++        e.params.insert("scale_height".into(), b);
++        if rot != (0.0, 0.0) {
++            let mut r = Param::new(f(0.0));
++            anim(&mut r, side_a, base, dur, n, f(rot.0), f(rot.1));
++            e.params.insert("rotation".into(), r);
++        }
++        it.effects.push(e);
++    };
++    let flash = |it: &mut filmcraft_project::TrackItem, peak: f64| {
++        if let Some(mut e) = fx_instance("brightness_contrast") {
++            let mut l = Param::new(f(0.0));
++            anim(&mut l, side_a, base, dur, n, f(if side_a { 0.0 } else { peak }), f(if side_a { peak } else { 0.0 }));
++            e.params.insert("brightness".into(), l);
++            it.effects.push(e);
++        }
++    };
++    let (a, b) = if side_a { (true, false) } else { (false, true) };
++    let _ = (a, b);
++    match preset {
++        "c_zoom_in" => {
++            if side_a { xform(it, (100.0, 320.0), (100.0, 320.0), (0.0, 0.0)) } else { xform(it, (320.0, 100.0), (320.0, 100.0), (0.0, 0.0)) }
++            gblur(it, 45.0);
++        }
++        "c_zoom_spin" => {
++            if side_a { xform(it, (100.0, 300.0), (100.0, 300.0), (0.0, 35.0)) } else { xform(it, (300.0, 100.0), (300.0, 100.0), (-35.0, 0.0)) }
++            gblur(it, 45.0);
++        }
++        "c_zoom_out" => {
++            if side_a { xform(it, (100.0, 40.0), (100.0, 40.0), (0.0, 0.0)) } else { xform(it, (250.0, 100.0), (250.0, 100.0), (0.0, 0.0)) }
++            gblur(it, 35.0);
++        }
++        "c_spin" => {
++            if side_a { xform(it, (100.0, 130.0), (100.0, 130.0), (0.0, 180.0)) } else { xform(it, (130.0, 100.0), (130.0, 100.0), (-180.0, 0.0)) }
++            gblur(it, 50.0);
++        }
++        "c_blur" => gblur(it, 80.0),
++        "c_flash" => {
++            flash(it, 100.0);
++            if side_a { xform(it, (100.0, 112.0), (100.0, 112.0), (0.0, 0.0)) } else { xform(it, (112.0, 100.0), (112.0, 100.0), (0.0, 0.0)) }
++        }
++        "c_stretch" => {
++            if side_a { xform(it, (100.0, 260.0), (100.0, 40.0), (0.0, 0.0)) } else { xform(it, (40.0, 100.0), (260.0, 100.0), (0.0, 0.0)) }
++            blur(it, 0.0, 120.0);
++        }
++        "c_flip" => {
++            // gira come una carta: A si stringe fino a sparire, B si apre
++            if side_a { xform(it, (100.0, 0.0), (100.0, 100.0), (0.0, 0.0)) } else { xform(it, (0.0, 100.0), (100.0, 100.0), (0.0, 0.0)) }
++            blur(it, 90.0, 60.0);
++        }
++        "c_bounce" => {
++            if !side_a {
++                let Some(mut e) = fx_instance("transform") else { return };
++                e.params.insert("position".into(), Param::new(ParamValue::Vec2(c)));
++                e.params.insert("anchor".into(), Param::new(ParamValue::Vec2(c)));
++                let mut sc = Param::new(f(100.0));
++                let fr = Tick((n.0 / 3).max(1));
++                kf(&mut sc, base, f(70.0), Interpolation::EaseOut);
++                kf(&mut sc, Tick(base.0 + fr.0 * 2), f(112.0), Interpolation::AutoBezier);
++                kf(&mut sc, Tick(base.0 + fr.0 * 3), f(96.0), Interpolation::AutoBezier);
++                kf(&mut sc, Tick(base.0 + (fr.0 * 4).min(dur.0)), f(100.0), Interpolation::Linear);
++                e.params.insert("scale_height".into(), sc.clone());
++                e.params.insert("scale_width".into(), sc);
++                it.effects.push(e);
++            }
 +        }
 +        "c_slide_left" | "c_slide_right" | "c_slide_up" | "c_slide_down" | "c_whip" => {
 +            let (dx, dy, ang) = match preset {
@@ -1109,32 +1185,54 @@ index 0000000..1436033
 +            blur(it, ang, if preset == "c_whip" { 260.0 } else { 160.0 });
 +        }
 +        "c_glitch" => {
-+            if let Some(mut e) = fx_instance("rgb_split") {
-+                let mut a = Param::new(f(0.0));
-+                anim(&mut a, side_a, base, dur, n, f(if side_a { 0.0 } else { 60.0 }), f(if side_a { 60.0 } else { 0.0 }));
-+                e.params.insert("amount".into(), a);
++            // scatti orizzontali a gradini + sfocatura direzionale + lampo
++            if let Some(mut e) = fx_instance("offset") {
++                let mut sp = Param::new(ParamValue::Vec2(c));
++                let steps = [0.0, 0.06, -0.09, 0.04, -0.12, 0.08, 0.0];
++                let fr = Tick((n.0 / steps.len() as i64).max(1));
++                let t0 = if side_a { Tick(base.0 + (dur.0 - n.0).max(0)) } else { base };
++                for (k, d) in steps.iter().enumerate() {
++                    let t = Tick(t0.0 + fr.0 * k as i64);
++                    if t.0 > base.0 + dur.0 {
++                        break;
++                    }
++                    kf(&mut sp, t, pt(c.x + d * w, c.y), Interpolation::Hold);
++                }
++                e.params.insert("shift".into(), sp);
 +                it.effects.push(e);
 +            }
-+            blur(it, 90.0, 60.0);
++            blur(it, 90.0, 80.0);
++            flash(it, 35.0);
 +        }
 +        "c_impact" => {
 +            if !side_a {
-+                if let Some(mut e) = fx_instance("camera_shake") {
-+                    let mut a = Param::new(f(0.0));
-+                    kf(&mut a, base, f(80.0), Interpolation::Linear);
-+                    kf(&mut a, Tick(base.0 + (n.0 * 2).min(dur.0)), f(0.0), Interpolation::EaseIn);
-+                    e.params.insert("amount".into(), a);
-+                    e.params.insert("motion_blur".into(), Param::new(ParamValue::Bool(true)));
-+                    it.effects.push(e);
-+                }
++                // scossone fatto con la posizione della Trasformazione (la fa la GPU)
 +                let Some(mut t) = fx_instance("transform") else { return };
-+                t.params.insert("position".into(), Param::new(ParamValue::Vec2(c)));
 +                t.params.insert("anchor".into(), Param::new(ParamValue::Vec2(c)));
++                let amp = w.min(h) * 0.03;
++                let offs = [(1.0, -0.6), (-0.9, 0.8), (0.7, 0.5), (-0.5, -0.7), (0.35, 0.3), (-0.2, -0.15), (0.0, 0.0)];
++                let fr = Tick((n.0 * 2 / offs.len() as i64).max(1));
++                let mut pp = Param::new(ParamValue::Vec2(c));
++                for (k, (dx, dy)) in offs.iter().enumerate() {
++                    let tt = Tick(base.0 + fr.0 * k as i64);
++                    if tt.0 > base.0 + dur.0 {
++                        break;
++                    }
++                    let d = 1.0 - k as f64 / offs.len() as f64;
++                    kf(&mut pp, tt, pt(c.x + dx * amp * d, c.y + dy * amp * d), Interpolation::Linear);
++                }
++                t.params.insert("position".into(), pp);
 +                let mut sc = Param::new(f(100.0));
 +                anim(&mut sc, false, base, dur, n, f(118.0), f(108.0));
 +                t.params.insert("scale_height".into(), sc.clone());
 +                t.params.insert("scale_width".into(), sc);
 +                it.effects.push(t);
++                let mut fl = Param::new(f(0.0));
++                anim(&mut fl, false, base, dur, Tick(n.0 / 2), f(40.0), f(0.0));
++                if let Some(mut e) = fx_instance("brightness_contrast") {
++                    e.params.insert("brightness".into(), fl);
++                    it.effects.push(e);
++                }
 +            }
 +        }
 +        _ => {}
@@ -1303,7 +1401,10 @@ index 0000000..1436033
 +/// Il tipo di suono di ogni effetto Jarvis.
 +pub fn sfx_kind(preset: &str) -> Option<&'static str> {
 +    Some(match preset {
-+        "c_zoom_in" | "zoom_blur" | "cross_zoom" | "dissolve" => "transition",
++        "c_zoom_in" | "c_zoom_out" | "c_blur" | "c_stretch" | "zoom_blur" | "cross_zoom" | "dissolve" | "morph" => "transition",
++        "c_flip" | "c_bounce" => "pop",
++        "c_spin" => "complex",
++        "c_flash" => "boom",
 +        "c_slide_left" | "c_slide_right" | "c_slide_up" | "c_slide_down" | "c_whip" | "whip" | "push" => "swoosh",
 +        "c_zoom_spin" | "spin" | "light_leak" => "complex",
 +        "c_glitch" | "glitch" | "vhs" => "glitch",
@@ -1948,21 +2049,23 @@ index 0000000..1436033
 +    // suoni: percorsi ___MH_PATH___ = cartella Assets del prodotto
 +    let assets = path.ancestors().find(|a| a.join("Assets").is_dir()).map(|a| a.join("Assets"));
 +    let mut audio = Vec::new();
-+    for item in doc.descendants().filter(|n| n.tag_name().name() == "AudioClipTrackItem" && n.attribute("ObjectID").is_some()) {
-+        let start = txt(item, "Start").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
-+        let media = rf(item, "SubClip").and_then(|r| objects.get(r)).and_then(|sc| rf(*sc, "Clip")).and_then(|r| objects.get(r));
-+        let _ = media;
-+        let p = doc
-+            .descendants()
-+            .filter(|n| n.tag_name().name() == "ActualMediaFilePath")
-+            .filter_map(|n| n.text())
-+            .find(|t| t.starts_with("___MH_PATH___"))
-+            .map(|t| t.trim_start_matches("___MH_PATH___").to_string());
-+        if let (Some(rel), Some(a)) = (p, &assets) {
-+            let f = a.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
-+            if f.exists() {
-+                audio.push((f, Tick(start)));
++    // i file audio del pacchetto (gli altri percorsi ___MH_PATH___ sono grafiche .aegraphic)
++    let mut audio_paths: Vec<String> = Vec::new();
++    for t in doc.descendants().filter(|n| n.tag_name().name() == "ActualMediaFilePath").filter_map(|n| n.text()) {
++        if let Some(rel) = t.strip_prefix("___MH_PATH___") {
++            let low = rel.to_lowercase();
++            if [".wav", ".mp3", ".aif", ".aiff", ".m4a", ".ogg"].iter().any(|e| low.ends_with(e)) && !audio_paths.iter().any(|p| p == rel) {
++                audio_paths.push(rel.to_string());
 +            }
++        }
++    }
++    let items: Vec<_> = doc.descendants().filter(|n| n.tag_name().name() == "AudioClipTrackItem" && n.attribute("ObjectID").is_some()).collect();
++    for (k, item) in items.iter().enumerate() {
++        let start = txt(*item, "Start").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
++        let (Some(rel), Some(a)) = (audio_paths.get(k % audio_paths.len().max(1)), &assets) else { continue };
++        let f = a.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
++        if f.exists() {
++            audio.push((f, Tick(start)));
 +        }
 +    }
 +    Ok(MhTransition { split, tracks, audio })
@@ -3849,6 +3952,162 @@ index 0000000..e08bb9e
 +    s.avatar = path;
 +    s.save();
 +}
+diff --git a/crates/ui-egui/src/jarvis_sounds.rs b/crates/ui-egui/src/jarvis_sounds.rs
+new file mode 100644
+index 0000000..b2cf3aa
+--- /dev/null
++++ b/crates/ui-egui/src/jarvis_sounds.rs
+@@ -0,0 +1,150 @@
++//! Jarvis Composer › Suoni: gli effetti sonori di Premiere Composer (e quelli in
++//! %LOCALAPPDATA%\FilmCraftJarvis\sfx) divisi per categoria, da ascoltare e mettere all'indicatore.
++//! I file restano dove sono sul PC: niente viene copiato o distribuito.
++
++use serde_json::{Value, json};
++
++pub(crate) struct Sounds {
++    filter: String,
++    cat: String,
++    gain: f32,
++    playing: Option<(std::path::PathBuf, std::process::Child)>,
++}
++
++impl Default for Sounds {
++    fn default() -> Self {
++        Sounds { filter: String::new(), cat: String::new(), gain: 0.0, playing: None }
++    }
++}
++
++/// La categoria di un suono: la cartella sotto "Sounds" (Boom, Swoosh, Pop…), se no la cartella del file.
++fn category(p: &std::path::Path) -> String {
++    let parts: Vec<String> = p.iter().map(|c| c.to_string_lossy().to_string()).collect();
++    if let Some(i) = parts.iter().position(|c| c.to_lowercase().contains("sounds")) {
++        if let Some(c) = parts.get(i + 1).filter(|_| i + 2 < parts.len()) {
++            return c.clone();
++        }
++    }
++    let parent = p.parent().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
++    match parent.to_lowercase().as_str() {
++        "audio" => "Transizioni".into(),
++        "sfx" => "I miei suoni".into(),
++        _ => parent,
++    }
++}
++
++fn clean(name: &str) -> String {
++    name.trim_start_matches(|c: char| c == '(' || c.is_ascii_digit() || c == ')' || c == ' ').to_string()
++}
++
++fn stop(s: &mut Sounds) {
++    if let Some((_, mut ch)) = s.playing.take() {
++        let _ = ch.kill();
++    }
++}
++
++/// Ascolto veloce (Windows: il lettore di sistema, solo .wav, senza finestre).
++fn play(s: &mut Sounds, p: &std::path::Path) {
++    stop(s);
++    #[cfg(windows)]
++    {
++        use std::os::windows::process::CommandExt;
++        let path = p.to_string_lossy().replace('\'', "''");
++        if let Ok(ch) = std::process::Command::new("powershell")
++            .args(["-NoProfile", "-NonInteractive", "-Command", &format!("(New-Object Media.SoundPlayer '{path}').PlaySync()")])
++            .creation_flags(0x0800_0000)
++            .spawn()
++        {
++            s.playing = Some((p.to_path_buf(), ch));
++        }
++    }
++    #[cfg(not(windows))]
++    {
++        if let Ok(ch) = std::process::Command::new("ffplay").args(["-nodisp", "-autoexit", "-loglevel", "quiet"]).arg(p).spawn() {
++            s.playing = Some((p.to_path_buf(), ch));
++        }
++    }
++}
++
++/// Torna il comando da eseguire (mettere un suono all'indicatore), se c'è.
++pub(crate) fn tab(s: &mut Sounds, ui: &mut egui::Ui) -> Option<(String, Value, String)> {
++    let mut run = None;
++    if let Some((_, ch)) = s.playing.as_mut()
++        && ch.try_wait().ok().flatten().is_some()
++    {
++        s.playing = None;
++    }
++    ui.heading("🔊 Suoni");
++    let lib = filmcraft_engine::jarvis::sfx_library();
++    if lib.is_empty() {
++        ui.label("Nessun suono trovato. Installa i pacchetti di Premiere Composer o metti dei .wav nella cartella dei tuoi suoni.");
++    }
++    ui.horizontal(|ui| {
++        ui.add(egui::TextEdit::singleline(&mut s.filter).hint_text("🔍 Cerca (boom, swoosh, pop…)").desired_width(200.0));
++        ui.label("Volume");
++        ui.add(egui::Slider::new(&mut s.gain, -24.0..=6.0).suffix(" dB"));
++        if ui.button("📁 I miei suoni").on_hover_text("Apre la cartella dove mettere i tuoi .wav (riapri FilmCraft per vederli)").clicked() {
++            if let Some(d) = std::env::var_os("LOCALAPPDATA").map(|la| std::path::PathBuf::from(la).join("FilmCraftJarvis").join("sfx")) {
++                let _ = std::fs::create_dir_all(&d);
++                #[cfg(windows)]
++                let _ = std::process::Command::new("explorer").arg(&d).spawn();
++            }
++        }
++    });
++    ui.small("▶ ascolta · ➕ mette il suono sull'indicatore, su una traccia \"SFX Jarvis\"");
++    let mut cats: Vec<String> = Vec::new();
++    for p in lib.iter() {
++        let c = category(p);
++        if !cats.contains(&c) {
++            cats.push(c);
++        }
++    }
++    cats.sort();
++    let q = s.filter.trim().to_lowercase();
++    if q.is_empty() && (s.cat.is_empty() || !cats.contains(&s.cat)) {
++        s.cat = cats.first().cloned().unwrap_or_default();
++    }
++    ui.horizontal_top(|ui| {
++        if q.is_empty() {
++            ui.vertical(|ui| {
++                ui.set_width(130.0);
++                for c in &cats {
++                    let n = lib.iter().filter(|p| &category(p) == c).count();
++                    if ui.selectable_label(*c == s.cat, format!("{} ({n})", clean(c))).clicked() {
++                        s.cat = c.clone();
++                    }
++                }
++            });
++            ui.separator();
++        }
++        ui.vertical(|ui| {
++            let items: Vec<&std::path::PathBuf> = lib
++                .iter()
++                .filter(|p| {
++                    if q.is_empty() {
++                        category(p) == s.cat
++                    } else {
++                        p.file_stem().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default().contains(&q) || category(p).to_lowercase().contains(&q)
++                    }
++                })
++                .collect();
++            if items.is_empty() {
++                ui.label("Nessun suono.");
++            }
++            for p in items {
++                let name = p.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
++                let now = s.playing.as_ref().is_some_and(|(pp, _)| pp == p);
++                ui.horizontal(|ui| {
++                    if ui.button(if now { "⏹" } else { "▶" }).clicked() {
++                        if now { stop(s) } else { play(s, p) }
++                    }
++                    if ui.button("➕").on_hover_text("Metti all'indicatore").clicked() {
++                        run = Some(("jarvis.placeSfx".into(), json!({"path": p.to_string_lossy(), "gain": s.gain}), String::new()));
++                    }
++                    ui.label(name);
++                });
++            }
++        });
++    });
++    run
++}
 diff --git a/crates/ui-egui/src/jarvis_titles.rs b/crates/ui-egui/src/jarvis_titles.rs
 new file mode 100644
 index 0000000..9c8196e
@@ -4222,10 +4481,10 @@ index 0000000..9c8196e
 +}
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..2f4a496
+index 0000000..1c26479
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
-@@ -0,0 +1,1148 @@
+@@ -0,0 +1,1166 @@
 +//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
 +
 +use serde_json::{Value, json};
@@ -4262,6 +4521,10 @@ index 0000000..2f4a496
 +    pending: Option<(String, Value, bool)>,
 +    sfx: bool,
 +    sfx_gain: f32,
++    /// suono sulle transizioni (Composer e Jarvis): acceso di base
++    trans_sfx: bool,
++    /// scheda Suoni
++    pub(crate) sounds: crate::jarvis_sounds::Sounds,
 +    /// trascrizione in corso in background
 +    cap: Option<CapRun>,
 +    /// separazione voce/musica in corso
@@ -4316,6 +4579,8 @@ index 0000000..2f4a496
 +            pending: None,
 +            sfx: false,
 +            sfx_gain: -3.0,
++            trans_sfx: true,
++            sounds: Default::default(),
 +            cap: None,
 +            sep: None,
 +            upd_checked: false,
@@ -4341,7 +4606,7 @@ index 0000000..2f4a496
 +/// Apre Jarvis Composer su una scheda (0 Composer, 1 Sottotitoli, 2 Transizioni ed effetti).
 +pub(crate) fn open_tab(app: &mut FilmcraftApp, tab: usize) {
 +    app.jarvis_ui.open = true;
-+    app.jarvis_ui.tab = tab.min(5);
++    app.jarvis_ui.tab = tab.min(6);
 +}
 +
 +pub(crate) fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
@@ -4391,7 +4656,7 @@ index 0000000..2f4a496
 +        .default_pos(ctx.content_rect().right_top() + egui::vec2(-400.0, 80.0))
 +        .show(ctx, |ui| {
 +            ui.horizontal(|ui| {
-+                for (i, t) in ["🎞 Composer", "🔤 Sottotitoli", "🎬 Transizioni ed effetti", "🆎 Titoli TikTok", "📢 Social", "✨ Gemini"].iter().enumerate() {
++                for (i, t) in ["🎞 Composer", "🔤 Sottotitoli", "🎬 Transizioni ed effetti", "🆎 Titoli TikTok", "📢 Social", "✨ Gemini", "🔊 Suoni"].iter().enumerate() {
 +                    ui.selectable_value(&mut st.tab, i, egui::RichText::new(*t).size(15.0).strong());
 +                }
 +            });
@@ -4399,6 +4664,11 @@ index 0000000..2f4a496
 +            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
 +            if st.tab == 0 {
 +                composer_library_ui(st, ui, ctx, &mut run);
++            }
++            if st.tab == 6 {
++                if let Some(r) = crate::jarvis_sounds::tab(&mut st.sounds, ui) {
++                    run = Some(r);
++                }
 +            }
 +            if st.tab == 1 {
 +            ui.heading("🔤 Sottotitoli animati");
@@ -4514,13 +4784,13 @@ index 0000000..2f4a496
 +                }
 +            });
 +            ui.horizontal(|ui| {
-+                ui.checkbox(&mut st.sfx, "🔊 Suono (swoosh)");
-+                ui.add_enabled(st.sfx, egui::Slider::new(&mut st.sfx_gain, -24.0..=6.0).suffix(" dB"));
++                ui.checkbox(&mut st.trans_sfx, "🔊 Suono sulle transizioni");
++                ui.add_enabled(st.trans_sfx, egui::Slider::new(&mut st.sfx_gain, -24.0..=6.0).suffix(" dB"));
 +            });
 +            if filmcraft_engine::jarvis::sfx_library().is_empty() {
 +                ui.small("Nessun suono trovato: metti dei .wav in %LOCALAPPDATA%\\FilmCraftJarvis\\sfx (o installa Premiere Composer).");
 +            }
-+            ui.label(egui::RichText::new("Stile Composer (keyframe + motion blur)").strong());
++            ui.label(egui::RichText::new("Stile Composer (leggere: le disegna la scheda video)").strong());
 +            ui.horizontal(|ui| {
 +                ui.label("Durata per lato");
 +                ui.add(egui::Slider::new(&mut st.frames, 3..=15).suffix(" fotogrammi"));
@@ -4528,7 +4798,7 @@ index 0000000..2f4a496
 +            egui::Grid::new("jarvis_comp").num_columns(3).spacing([6.0, 6.0]).show(ui, |ui| {
 +                for (k, (id, name)) in COMPOSER.iter().enumerate() {
 +                    if ui.add_sized([108.0, 26.0], egui::Button::new(*name)).clicked() {
-+                        run = Some(("jarvis.composer".into(), json!({"preset": id, "scope": SCOPES[st.scope].0, "frames": st.frames, "sfx": st.sfx, "sfxGain": st.sfx_gain}), String::new()));
++                        run = Some(("jarvis.composer".into(), json!({"preset": id, "scope": SCOPES[st.scope].0, "frames": st.frames, "sfx": st.trans_sfx, "sfxGain": st.sfx_gain}), String::new()));
 +                    }
 +                    if k % 3 == 2 {
 +                        ui.end_row();
@@ -4536,12 +4806,13 @@ index 0000000..2f4a496
 +                }
 +            });
 +            ui.add_space(4.0);
-+            ui.label(egui::RichText::new("Classiche").strong());
++            ui.label(egui::RichText::new("Classiche").strong()).on_hover_text("Queste le calcola il processore: in anteprima possono scattare. Le \"Stile Composer\" sopra sono più leggere.");
++            ui.small("Più pesanti in anteprima (le calcola il processore): se lagga usa quelle sopra.");
 +            egui::Grid::new("jarvis_tr").num_columns(3).spacing([6.0, 6.0]).show(ui, |ui| {
 +                let mut k = 0;
 +                for tp in TRANSITIONS.iter().map(|t| (t.id, t.name)).chain(std::iter::once(("mix", "🎲 Mix casuale"))) {
 +                    if ui.add_sized([108.0, 26.0], egui::Button::new(tp.1)).clicked() {
-+                        run = Some(("jarvis.transition".into(), json!({"preset": tp.0, "scope": SCOPES[st.scope].0, "sfx": st.sfx, "sfxGain": st.sfx_gain}), String::new()));
++                        run = Some(("jarvis.transition".into(), json!({"preset": tp.0, "scope": SCOPES[st.scope].0, "sfx": st.trans_sfx, "sfxGain": st.sfx_gain}), String::new()));
 +                    }
 +                    k += 1;
 +                    if k % 3 == 0 {
@@ -4555,6 +4826,7 @@ index 0000000..2f4a496
 +            ui.horizontal(|ui| {
 +                ui.label("Intensità");
 +                ui.add(egui::Slider::new(&mut st.amount, 0.3..=2.5));
++                ui.checkbox(&mut st.sfx, "🔊 Suono");
 +            });
 +            ui.horizontal_wrapped(|ui| {
 +                for (id, name) in CLIP_FX {
@@ -4632,6 +4904,7 @@ index 0000000..2f4a496
 +    match cmd {
 +        "jarvis.autoCaptions" => format!("✅ Creati {} pezzi di sottotitoli", v["captions"].as_u64().unwrap_or(0)),
 +        "jarvis.transition" | "jarvis.composer" => format!("✅ Transizioni messe: {} · suoni: {}", v["transitions"].as_u64().unwrap_or(0), v["sfx"].as_u64().unwrap_or(0)),
++        "jarvis.placeSfx" => "✅ Suono messo sull'indicatore (traccia SFX Jarvis)".into(),
 +        "jarvis.clipFx" => format!("✅ Effetto applicato a {} clip", v["clips"].as_u64().unwrap_or(0)),
 +        "jarvis.composerItem" => format!("✅ Transizione Composer: {} livelli · suoni: {}", v["layers"].as_u64().unwrap_or(0), v["sfx"].as_u64().unwrap_or(0)),
 +        _ => "✅ Fatto".into(),
@@ -5014,6 +5287,10 @@ index 0000000..2f4a496
 +    if st.mh_cat.is_empty() || !cats.contains(&st.mh_cat) {
 +        st.mh_cat = cats[0].clone();
 +    }
++    ui.horizontal(|ui| {
++        ui.checkbox(&mut st.trans_sfx, "🔊 Con il suono della transizione");
++        ui.add_enabled(st.trans_sfx, egui::Slider::new(&mut st.sfx_gain, -24.0..=6.0).suffix(" dB"));
++    });
 +    ui.small("Clic: sul taglio vicino all'indicatore · trascina sulla Timeline: sul taglio dove la lasci");
 +    ui.horizontal_top(|ui| {
 +        ui.vertical(|ui| {
@@ -5041,7 +5318,7 @@ index 0000000..2f4a496
 +                        resp
 +                    });
 +                    let resp = r.inner.on_hover_text(&it.name);
-+                    let base = json!({"path": it.path.to_string_lossy(), "scope": SCOPES[st.scope].0, "sfx": st.sfx, "sfxGain": st.sfx_gain + 3.0});
++                    let base = json!({"path": it.path.to_string_lossy(), "scope": SCOPES[st.scope].0, "sfx": st.trans_sfx, "sfxGain": st.sfx_gain + 3.0});
 +                    if resp.clicked() {
 +                        *run = Some(("jarvis.composerItem".into(), base.clone(), String::new()));
 +                    }
@@ -5375,10 +5652,10 @@ index 0000000..2f4a496
 +    *g = Some((now, seen));
 +}
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
-index c3fb34a..5d146db 100644
+index c3fb34a..f1ae07e 100644
 --- a/crates/ui-egui/src/lib.rs
 +++ b/crates/ui-egui/src/lib.rs
-@@ -73,6 +73,11 @@ pub mod state;
+@@ -73,6 +73,12 @@ pub mod state;
  pub mod theme;
  mod theme_favorites;
  pub mod updates_ui;
@@ -5386,11 +5663,12 @@ index c3fb34a..5d146db 100644
 +pub(crate) mod jarvis_titles;
 +pub(crate) mod jarvis_assist;
 +pub(crate) mod jarvis_audio;
++pub(crate) mod jarvis_sounds;
 +pub(crate) mod jarvis_social;
  pub mod widgets;
  
  use std::collections::HashMap;
-@@ -215,6 +220,7 @@ pub struct FilmcraftApp {
+@@ -215,6 +221,7 @@ pub struct FilmcraftApp {
      pub hooks: HostHooks,
      pub dialog: Option<Dialog>,
      pub(crate) updates_rt: updates_ui::Runtime,
@@ -5398,7 +5676,7 @@ index c3fb34a..5d146db 100644
      pub file_dialogs: panels::file_dialogs::FileDialogState,
      /// The native file dialog the host is showing ([`Self::pick`]).
      native_dialog: Option<native_dialogs::PendingDialog>,
-@@ -351,6 +357,8 @@ pub struct FilmcraftApp {
+@@ -351,6 +358,8 @@ pub struct FilmcraftApp {
      fonts_ready: bool,
      pub integrated_titlebar: bool,
      pub last_timeline_width: f32,
