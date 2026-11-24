@@ -296,10 +296,10 @@ index 44399e4..f4606e8 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..19e3e13
+index 0000000..c497802
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,1930 @@
+@@ -0,0 +1,1954 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -2230,6 +2230,30 @@ index 0000000..19e3e13
 +    })?;
 +    Ok(json!({"voice": voices, "music": musics}))
 +}
++
++/// I video da alleggerire per la preview (proxy di Jarvis): i file usati dalle clip video
++/// selezionate, o da tutte le clip video della sequenza se non ne è selezionata nessuna.
++/// (elemento, file, fotogrammi al secondo come li legge FilmCraft)
++pub fn proxy_targets(s: &Session) -> Vec<(u64, String, f64)> {
++    let Some(q) = s.active_sequence() else { return Vec::new() };
++    let sel = &s.state.selection;
++    let vids: Vec<&filmcraft_project::TrackItem> = q.video_tracks.iter().flat_map(|t| t.items.iter()).collect();
++    let any_sel = vids.iter().any(|it| sel.contains(&it.id));
++    let mut out: Vec<(u64, String, f64)> = Vec::new();
++    for it in vids {
++        if any_sel && !sel.contains(&it.id) {
++            continue;
++        }
++        let Some((root, m, _)) = s.project.resolve_media(it.item) else { continue };
++        let filmcraft_project::MediaRef::File { path } = &m.media else { continue };
++        let Some(v) = m.info.video.as_ref() else { continue };
++        if m.duration() < Tick::from_seconds_f64(2.0) || out.iter().any(|(i, _, _)| *i == root.0) {
++            continue;
++        }
++        out.push((root.0, path.clone(), v.frame_rate.as_f64()));
++    }
++    out
++}
 diff --git a/crates/engine/src/lib.rs b/crates/engine/src/lib.rs
 index cead3c7..3d04cce 100644
 --- a/crates/engine/src/lib.rs
@@ -3121,10 +3145,10 @@ index 0000000..13aeb0e
 +}
 diff --git a/crates/ui-egui/src/jarvis_audio.rs b/crates/ui-egui/src/jarvis_audio.rs
 new file mode 100644
-index 0000000..013342b
+index 0000000..d7cbaab
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_audio.rs
-@@ -0,0 +1,184 @@
+@@ -0,0 +1,288 @@
 +//! Jarvis: musica sotto la voce.
 +//! - "Abbassa la musica quando parlo": le clip selezionate diventano Musica con il ducking di
 +//!   Essential Sound contro tutto il resto (la voce), e si generano i keyframe del volume.
@@ -3142,6 +3166,8 @@ index 0000000..013342b
 +type Res = Arc<Mutex<Option<Result<Value, String>>>>;
 +
 +pub(crate) struct SepRun {
++    /// "separa" o "proxy"
++    kind: &'static str,
 +    res: Res,
 +    prog_file: std::path::PathBuf,
 +    pub(crate) msg: String,
@@ -3253,7 +3279,7 @@ index 0000000..013342b
 +        }
 +        c2.request_repaint();
 +    });
-+    app.jarvis_ui.sep = Some(SepRun { res, prog_file, msg: "Separo voce e musica…".into() });
++    app.jarvis_ui.sep = Some(SepRun { kind: "separa", res, prog_file, msg: "Separo voce e musica…".into() });
 +    app.ui.status = "Jarvis sta separando voce e musica: puoi continuare a lavorare".into();
 +}
 +
@@ -3274,14 +3300,19 @@ index 0000000..013342b
 +        ctx.request_repaint_after(std::time::Duration::from_millis(500));
 +        return;
 +    };
++    let kind = run.kind;
 +    app.jarvis_ui.sep = None;
 +    let v = match r {
 +        Ok(v) => v,
 +        Err(e) => {
-+            app.ui.status = format!("⚠ Separazione: {e}");
++            app.ui.status = format!("⚠ {}: {e}", if kind == "proxy" { "Proxy" } else { "Separazione" });
 +            return;
 +        }
 +    };
++    if kind == "proxy" {
++        proxies_done(app, &v);
++        return;
++    }
 +    let items: Vec<Value> = v["items"]
 +        .as_array()
 +        .map(|a| {
@@ -3308,6 +3339,103 @@ index 0000000..013342b
 +        Ok(_) => format!("✅ Voce e musica separate ({} clip): la musica si abbassa quando parli. L'audio originale è spento, non cancellato.", music.len()),
 +        Err(e) => format!("Voce e musica separate, ma il ducking non è riuscito: {e}"),
 +    };
++}
++
++// ---------------------------------------------------------------- preview fluida (proxy di Jarvis)
++
++/// Lancia Jarvis Clipper con `flag job out` in un thread; il risultato arriva in `poll`.
++fn spawn_jarvis(app: &mut FilmcraftApp, ctx: &egui::Context, kind: &'static str, flag: &str, job_v: Value, msg: &str) -> bool {
++    let Some(exe) = filmcraft_engine::jarvis::jarvis_exe() else {
++        app.ui.status = "⚠ Serve Jarvis Clipper installato e aggiornato".into();
++        return false;
++    };
++    let job = tmp(&format!("{kind}_job.json"));
++    let out = tmp(&format!("{kind}_out.json"));
++    let _ = std::fs::remove_file(&out);
++    let prog_file = std::path::PathBuf::from(format!("{}.progress", out.to_string_lossy()));
++    let _ = std::fs::remove_file(&prog_file);
++    if std::fs::write(&job, job_v.to_string()).is_err() {
++        app.ui.status = "⚠ Non riesco a scrivere nella cartella temporanea".into();
++        return false;
++    }
++    let res: Res = Arc::new(Mutex::new(None));
++    let r2 = res.clone();
++    let c2 = ctx.clone();
++    let flag = flag.to_string();
++    std::thread::spawn(move || {
++        let r = (|| -> Result<Value, String> {
++            let mut cmd = std::process::Command::new(exe);
++            cmd.arg(&flag).arg(&job).arg(&out);
++            #[cfg(windows)]
++            {
++                use std::os::windows::process::CommandExt;
++                cmd.creation_flags(0x0800_0000);
++            }
++            let st = cmd.status().map_err(|e| e.to_string())?;
++            let txt = std::fs::read_to_string(&out).map_err(|_| if st.success() { "Jarvis non ha risposto".to_string() } else { "Jarvis Clipper ha dato errore (aggiornalo)".to_string() })?;
++            let v: Value = serde_json::from_str(&txt).map_err(|e| e.to_string())?;
++            if let Some(e) = v["error"].as_str() {
++                return Err(e.to_string());
++            }
++            Ok(v)
++        })();
++        if let Ok(mut g) = r2.lock() {
++            *g = Some(r);
++        }
++        c2.request_repaint();
++    });
++    app.jarvis_ui.sep = Some(SepRun { kind, res, prog_file, msg: msg.into() });
++    app.ui.status = msg.into();
++    true
++}
++
++/// Tasto destro: crea con Jarvis (scheda video) copie leggere dei video usati, a metà risoluzione,
++/// frame rate costante e un fotogramma chiave ogni mezzo secondo, e le collega come proxy.
++/// La preview usa quelle, l'export usa sempre gli originali.
++pub(crate) fn proxies_selected(app: &mut FilmcraftApp, ctx: &egui::Context) {
++    if app.jarvis_ui.sep.is_some() {
++        return;
++    }
++    let targets = filmcraft_engine::jarvis::proxy_targets(&app.session);
++    if targets.is_empty() {
++        app.ui.status = "⚠ Nessun video da alleggerire nella sequenza".into();
++        return;
++    }
++    let items: Vec<Value> = targets
++        .iter()
++        .map(|(item, path, fps)| {
++            let p = std::path::Path::new(path);
++            let dir = p.parent().map(|d| d.join("Proxy Jarvis")).unwrap_or_else(|| tmp("proxy"));
++            let stem = p.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "video".into());
++            json!({"item": item, "path": path, "fps": fps, "out": dir.join(format!("{stem}_proxy.mp4")).to_string_lossy()})
++        })
++        .collect();
++    let n = items.len();
++    spawn_jarvis(app, ctx, "proxy", "--proxy", json!({"items": items}), &format!("Jarvis prepara la preview fluida ({n} video): puoi continuare a lavorare"));
++}
++
++fn proxies_done(app: &mut FilmcraftApp, v: &Value) {
++    let ok: Vec<(u64, String)> = v["items"]
++        .as_array()
++        .map(|a| {
++            a.iter()
++                .filter_map(|i| Some((i["item"].as_u64()?, i["out"].as_str()?.to_string())))
++                .filter(|(_, p)| std::path::Path::new(p).is_file())
++                .collect()
++        })
++        .unwrap_or_default();
++    if ok.is_empty() {
++        app.ui.status = "⚠ Jarvis non ha creato i proxy".into();
++        return;
++    }
++    let items: Vec<u64> = ok.iter().map(|x| x.0).collect();
++    let paths: Vec<String> = ok.iter().map(|x| x.1.clone()).collect();
++    if let Err(e) = app.session.execute("media.attachProxies", json!({"items": items, "paths": paths, "force": true})) {
++        app.ui.status = format!("⚠ Proxy creati ma non collegati: {e}");
++        return;
++    }
++    let _ = app.session.execute("media.toggleProxies", json!({"enabled": true}));
++    app.ui.status = format!("✅ Preview fluida attiva ({} video). L'export usa sempre i video originali.", ok.len());
 +}
 diff --git a/crates/ui-egui/src/jarvis_social.rs b/crates/ui-egui/src/jarvis_social.rs
 new file mode 100644
@@ -3925,10 +4053,10 @@ index 0000000..9c8196e
 +}
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..5c3e973
+index 0000000..9e052c7
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
-@@ -0,0 +1,1133 @@
+@@ -0,0 +1,1137 @@
 +//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
 +
 +use serde_json::{Value, json};
@@ -4981,6 +5109,10 @@ index 0000000..5c3e973
 +        run = Some(("jarvis.transition", json!({"preset": "morph", "scope": "playhead", "sfx": false})));
 +    }
 +    let busy = app.jarvis_ui.sep.is_some();
++    if ui.add_enabled(!busy, egui::Button::new("⚡ Preview fluida (proxy leggeri di Jarvis)")).on_hover_text("Se la preview lagga: Jarvis crea copie leggere dei video (selezionati, o tutti) e la preview usa quelle. L'export resta con gli originali.").clicked() {
++        crate::jarvis_audio::proxies_selected(app, ctx);
++        ui.close();
++    }
 +    if ui.add_enabled(!busy, egui::Button::new("🎵 Abbassa la musica quando parlo")).on_hover_text("Seleziona le clip di musica (su una traccia diversa dalla voce): si abbassano da sole mentre parli").clicked() {
 +        crate::jarvis_audio::duck_selected(app);
 +        ui.close();

@@ -61,6 +61,16 @@ if __name__ == "__main__":
                     pass
                 ok = True
             os._exit(0 if ok else 1)
+    if "--proxy" in sys.argv:
+        # chiamato da FilmCraft Jarvis: copie leggere dei video per la preview
+        i = sys.argv.index("--proxy")
+        try:
+            from core import proxy
+            ok = proxy.run(sys.argv[i + 1], sys.argv[i + 2])
+        except Exception:
+            traceback.print_exc()
+            ok = False
+        os._exit(0 if ok else 1)
     if "--separa" in sys.argv:
         # chiamato da FilmCraft Jarvis: separa voce e musica delle clip selezionate
         i = sys.argv.index("--separa")
