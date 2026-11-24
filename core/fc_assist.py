@@ -18,13 +18,16 @@ Ricevi la timeline attuale (tracce, clip con inizio/fine in secondi della sequen
 e se c'è la trascrizione con i tempi di ogni parola) e una richiesta a parole. Rispondi con le operazioni da
 fare, in ordine, usando SOLO questi tipi ("op"):
 - "cut": toglie il tratto [start, end] da tutte le tracce e chiude il buco (come un ripple delete).
-- "zoom": zoom sulla clip video in [start, end]; "amount" 1 = normale, 2 = forte. "smooth": true = zoom lento.
+- "zoom": zoom che RESTA per tutto [start, end] (entra morbido all'inizio, esce alla fine); metti SEMPRE sia
+  start che end. "amount" 1 = normale, 2 = forte. "smooth": true = zoom lento che avanza piano per tutto il tratto.
+  "preset": "punch" solo se vuoi uno scatto secco su una battuta (zoom immediato, tratto corto).
 - "shake": scossone sulla clip video in [start, end].
 - "transition": transizione al taglio più vicino a "time"; "preset" uno tra zoom_blur, whip, cross_zoom, spin,
   push, shake, glitch, flash, light_leak, vhs, dissolve.
 - "title": titolo TikTok (testo bianco con bordo) a "time" per "seconds" secondi con "text" (anche emoji).
-- "captions": sottotitoli animati solo in [start, end] ("style": jarvis, hormozi, parola, beast, box, neon,
-  minimal; "anim": pop_osc, pop, pop_su, rimbalzo, scivola, tremolio, zoom, nessuna).
+- "captions": sottotitoli animati solo in [start, end] (metti SEMPRE start ed end; per tutto il video start 0 ed
+  end = durata) ("style": jarvis, hormozi, parola, beast, box, neon, minimal; "anim": pop_osc, pop, pop_su,
+  rimbalzo, scivola, tremolio, zoom, nessuna).
 - "volume": cambia il volume delle clip audio in [start, end] di "db" decibel (+ alza, - abbassa).
 - "marker": marcatore a "time" con "name".
 - "sfx": suono a "time"; "name" = il nome (esatto o quasi) di uno dei SUONI DISPONIBILI (es. vine boom); "db" volume.
@@ -32,6 +35,9 @@ fare, in ordine, usando SOLO questi tipi ("op"):
   IMMAGINI DISPONIBILI.
 - "bw": bianco e nero sulla clip video in [start, end].
 Per un flash bianco tra due pezzi usa "transition" con preset "flash".
+"INTRO" = i primi secondi del video (di solito fino alla fine della prima frase forte, 5-20 s): se Jarvis ti chiede
+di "fare l'intro" fai almeno: un "title" a 0 con il gancio, "captions" su tutta l'intro, uno "zoom" che dura tutta
+l'intro, e un "sfx" di impatto all'inizio se ci sono suoni.
 Una richiesta lunga va spezzata in tante operazioni, una per ogni cosa chiesta, nell'ordine giusto, ma SENZA
 ripetere operazioni uguali: di solito bastano poche operazioni (raramente più di 30). Non riscrivere la
 timeline e non elencare cose già presenti.
@@ -110,6 +116,13 @@ def run_assist(job_path, out):
                     seen.add(k); ops.append(o)
             res["ops"] = ops[:80]
             res["model"] = m
+            try:  # l'ultima richiesta e risposta, per capire cosa ha fatto Gemini
+                lp = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "JarvisClipper", "gemini_filmcraft_ultimo.json")
+                with open(lp, "w", encoding="utf-8") as fh:
+                    json.dump({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "prompt": job.get("prompt"), "model": m, "risposta": res,
+                               "contesto_caratteri": len(text)}, fh, ensure_ascii=False, indent=1)
+            except Exception:
+                pass
             with open(out, "w", encoding="utf-8") as fh:
                 json.dump(res, fh, ensure_ascii=False)
             return True

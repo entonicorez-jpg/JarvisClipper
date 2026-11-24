@@ -296,10 +296,10 @@ index 44399e4..f4606e8 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..e48dd6b
+index 0000000..1436033
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,1991 @@
+@@ -0,0 +1,2034 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -898,9 +898,52 @@ index 0000000..e48dd6b
 +    let (w, h) = s.active_sequence().map(|q| (q.settings.width as f64, q.settings.height as f64)).unwrap_or((1920.0, 1080.0));
 +    let rate = s.sequence_rate();
 +    let f = rate.frame_duration();
++    // "hold" / "hold_smooth": uno zoom che dura su tutte le clip scelte come un pezzo unico
++    // (entra sulla prima, resta, esce sull'ultima), non uno scatto per clip
++    let span = s.active_sequence().map(|q| {
++        let r: Vec<(Tick, Tick)> = clips.iter().filter_map(|c| q.find_item(*c).map(|(_, it)| (it.start, it.end()))).collect();
++        (r.iter().map(|x| x.0).min().unwrap_or(Tick::ZERO), r.iter().map(|x| x.1).max().unwrap_or(Tick::ZERO))
++    });
 +    let n = s.edit_sequence("Effetto Jarvis", |q, _ctx, _st| {
 +        let mut n = 0;
 +        for c in &clips {
++            if fx == "hold" || fx == "hold_smooth" {
++                let Some((_, it)) = q.find_item_mut(*c) else { continue };
++                let (t0, t1) = (it.start, it.end());
++                let (dur, b0) = (it.duration, it.source_in);
++                let Some(m) = it.effect_mut("motion") else { continue };
++                let base = m.params.get("scale").map(|p| if p.is_animated() { 100.0 } else { p.f64_at(b0) }).unwrap_or(100.0);
++                let (s0, s1) = span.unwrap_or((t0, t1));
++                let total = (s1.0 - s0.0).max(1) as f64;
++                let mut sp = Param::new(ParamValue::Float(base));
++                if fx == "hold" {
++                    let z = base * (1.0 + 0.18 * amount);
++                    let ramp = Tick((f.0 * 6).min(dur.0 / 3));
++                    sp = Param::new(ParamValue::Float(z));
++                    if t0 == s0 {
++                        sp.put_keyframe(b0, ParamValue::Float(base));
++                        sp.put_keyframe(Tick(b0.0 + ramp.0), ParamValue::Float(z));
++                    }
++                    if t1 == s1 {
++                        if t0 != s0 {
++                            sp.put_keyframe(b0, ParamValue::Float(z));
++                        }
++                        sp.put_keyframe(Tick(b0.0 + dur.0 - ramp.0), ParamValue::Float(z));
++                        sp.put_keyframe(Tick(b0.0 + dur.0), ParamValue::Float(base));
++                    }
++                    for k in &mut sp.keyframes {
++                        k.interp = Interpolation::EaseOut;
++                    }
++                } else {
++                    // avanza piano e continuo per tutto il tratto (anche attraverso i tagli)
++                    let at = |t: Tick| base * (1.0 + 0.12 * amount * ((t.0 - s0.0) as f64 / total).clamp(0.0, 1.0));
++                    sp.put_keyframe(b0, ParamValue::Float(at(t0)));
++                    sp.put_keyframe(Tick(b0.0 + dur.0), ParamValue::Float(at(t1)));
++                }
++                m.params.insert("scale".into(), sp);
++                n += 1;
++                continue;
++            }
 +            let Some((_, it)) = q.find_item_mut(*c) else { continue };
 +            let dur = it.duration;
 +            let b0 = it.source_in;
@@ -2599,10 +2642,10 @@ index fd5f66c..fc6ef4d 100644
  	Add Guide…	Aggiungi guida…
 diff --git a/crates/ui-egui/src/jarvis_assist.rs b/crates/ui-egui/src/jarvis_assist.rs
 new file mode 100644
-index 0000000..13aeb0e
+index 0000000..82badfb
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_assist.rs
-@@ -0,0 +1,577 @@
+@@ -0,0 +1,593 @@
 +//! Jarvis Composer › Gemini: dici (o scrivi) cosa vuoi cambiare nella timeline e Gemini lo fa con i
 +//! comandi di FilmCraft (tagli, zoom, scossoni, transizioni, titoli, sottotitoli, volume, marcatori).
 +//! La richiesta a Gemini e il microfono passano da Jarvis Clipper (`--fc-assist`, `--listen`), che ha
@@ -2981,10 +3024,11 @@ index 0000000..13aeb0e
 +        let start = f(o, "start").and_then(&shift);
 +        let end = f(o, "end").and_then(|e| shift(e - 0.001).map(|x| x + 0.001));
 +        let time = f(o, "time").and_then(&shift).or(start);
-+        // zoom/bianco e nero senza fine: 1,5 s da dove inizia
++        // senza fine: zoom/bianco e nero 3 s, sottotitoli 20 s da dove iniziano
++        let dflt = if op == "captions" { 20.0 } else if op == "shake" { 1.5 } else { 3.0 };
 +        let (start, end) = match (start, end, time) {
-+            (Some(a), None, _) if matches!(op, "zoom" | "shake" | "bw") => (Some(a), Some(a + f(o, "seconds").unwrap_or(1.5))),
-+            (None, None, Some(t)) if matches!(op, "zoom" | "shake" | "bw") => (Some(t), Some(t + f(o, "seconds").unwrap_or(1.5))),
++            (Some(a), None, _) if matches!(op, "zoom" | "shake" | "bw" | "captions") => (Some(a), Some(a + f(o, "seconds").unwrap_or(dflt))),
++            (None, None, Some(t)) if matches!(op, "zoom" | "shake" | "bw" | "captions") => (Some(t), Some(t + f(o, "seconds").unwrap_or(dflt))),
 +            x => (x.0, x.1),
 +        };
 +        match op {
@@ -3024,7 +3068,7 @@ index 0000000..13aeb0e
 +                            n += 1;
 +                        }
 +                    }
-+                    None => missing.push(format!("suono \"{q}\"")),
++                    None => missing.push(format!("suono \"{q}\" (non è nelle tue cartelle)")),
 +                }
 +                continue;
 +            }
@@ -3042,7 +3086,7 @@ index 0000000..13aeb0e
 +                            n += 1;
 +                        }
 +                    }
-+                    None => missing.push(format!("immagine \"{q}\"")),
++                    None => missing.push(format!("immagine \"{q}\" (non è nelle tue cartelle)")),
 +                }
 +                continue;
 +            }
@@ -3063,9 +3107,11 @@ index 0000000..13aeb0e
 +                    .map(|q| {
 +                        q.video_tracks
 +                            .iter()
-+                            .filter(|t| t.name != filmcraft_engine::jarvis::CAPTION_TRACK && t.name != filmcraft_engine::jarvis::TITLE_TRACK)
++                            .filter(|t| t.name != filmcraft_engine::jarvis::CAPTION_TRACK && t.name != filmcraft_engine::jarvis::TITLE_TRACK && t.name != "Meme Jarvis")
 +                            .flat_map(|t| t.items.iter())
 +                            .filter(|it| it.start >= ta && it.end() <= tb)
++                            // solo il video vero: non i livelli di regolazione degli zoom di Jarvis (si sommerebbero)
++                            .filter(|it| !matches!(app.session.project.item(it.item).map(|x| &x.kind), Some(filmcraft_project::ItemKind::AdjustmentLayer { .. })))
 +                            .map(|it| it.id)
 +                            .collect()
 +                    })
@@ -3074,7 +3120,15 @@ index 0000000..13aeb0e
 +                    continue;
 +                }
 +                app.session.state.selection = ids;
-+                let preset = if op == "shake" { "shake" } else if o["smooth"].as_bool().unwrap_or(false) { "zoom_in" } else { "punch" };
++                let preset = if op == "shake" {
++                    "shake"
++                } else if o["preset"].as_str() == Some("punch") {
++                    "punch"
++                } else if o["smooth"].as_bool().unwrap_or(false) {
++                    "hold_smooth"
++                } else {
++                    "hold"
++                };
 +                let amount = f(o, "amount").unwrap_or(1.0).clamp(0.3, 2.5);
 +                if crate::menus::invoke(app, ctx, "jarvis.clipFx", json!({"preset": preset, "amount": amount, "sfx": false})).is_ok() {
 +                    n += 1;
@@ -3132,8 +3186,13 @@ index 0000000..13aeb0e
 +    }
 +    if !cap_ranges.is_empty() {
 +        let (style, anim) = cap_style.unwrap_or(("parola".into(), "pop_osc".into()));
++        app.jarvis_ui.msg.clear();
 +        crate::jarvis_ui::start_captions_with(app, ctx, json!({"style": style, "anim": anim, "ranges": cap_ranges, "model": "whisper-small", "language": "it", "font": filmcraft_engine::jarvis::DEFAULT_FONT, "size": 100.0}));
-+        n += 1;
++        if app.jarvis_ui.msg.starts_with('⚠') {
++            missing.push(format!("sottotitoli ({})", app.jarvis_ui.msg.trim_start_matches('⚠').trim()));
++        } else {
++            n += 1;
++        }
 +    }
 +    if !titles.is_empty() {
 +        let size = app.session.active_sequence().map(|q| (q.settings.width, q.settings.height)).unwrap_or((1080, 1920));
@@ -3176,7 +3235,7 @@ index 0000000..13aeb0e
 +    let miss = if missing.is_empty() {
 +        String::new()
 +    } else {
-+        format!(" · non trovati nelle tue cartelle: {}", missing.join(", "))
++        format!(" · non riuscito: {}", missing.join(", "))
 +    };
 +    format!("{n_cut} tagli · {n} modifiche{miss}")
 +}
@@ -4091,10 +4150,10 @@ index 0000000..9c8196e
 +}
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..1afcd00
+index 0000000..2f4a496
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
-@@ -0,0 +1,1140 @@
+@@ -0,0 +1,1148 @@
 +//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
 +
 +use serde_json::{Value, json};
@@ -4126,7 +4185,7 @@ index 0000000..1afcd00
 +    frames: u32,
 +    font: String,
 +    font_ok: Option<(String, bool)>,
-+    msg: String,
++    pub(crate) msg: String,
 +    /// comando da eseguire al prossimo frame (così il messaggio "attendi" si vede prima)
 +    pending: Option<(String, Value, bool)>,
 +    sfx: bool,
@@ -4521,8 +4580,9 @@ index 0000000..1afcd00
 +            let r = crate::menus::invoke(app, ctx, "jarvis.autoCaptions", p);
 +            app.jarvis_ui.msg = match r {
 +                Ok(v) => done_msg("jarvis.autoCaptions", &v),
-+                Err(e) => format!("⚠ {e}"),
++                Err(e) => format!("⚠ Sottotitoli: {e}"),
 +            };
++            app.ui.status = app.jarvis_ui.msg.clone();
 +        }
 +        Ok(Some(job)) => {
 +            let prog = std::sync::Arc::new(std::sync::Mutex::new((0.0f32, "Preparo l'audio…".to_string())));
@@ -4540,7 +4600,10 @@ index 0000000..1afcd00
 +            app.jarvis_ui.msg.clear();
 +            app.jarvis_ui.cap = Some(CapRun { handle, prog, params: p });
 +        }
-+        Err(e) => app.jarvis_ui.msg = format!("⚠ {e}"),
++        Err(e) => {
++            app.jarvis_ui.msg = format!("⚠ Sottotitoli: {e}");
++            app.ui.status = app.jarvis_ui.msg.clone();
++        }
 +    }
 +}
 +
@@ -4607,10 +4670,14 @@ index 0000000..1afcd00
 +            let r = crate::menus::invoke(app, ctx, "jarvis.autoCaptions", p);
 +            app.jarvis_ui.msg = match r {
 +                Ok(v) => done_msg("jarvis.autoCaptions", &v),
-+                Err(e) => format!("⚠ {e}"),
++                Err(e) => format!("⚠ Sottotitoli: {e}"),
 +            };
++            app.ui.status = app.jarvis_ui.msg.clone();
 +        }
-+        Err(e) => app.jarvis_ui.msg = format!("⚠ {e}"),
++        Err(e) => {
++            app.jarvis_ui.msg = format!("⚠ Sottotitoli: {e}");
++            app.ui.status = app.jarvis_ui.msg.clone();
++        }
 +    }
 +}
 +
