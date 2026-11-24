@@ -296,10 +296,10 @@ index 44399e4..f4606e8 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..c497802
+index 0000000..e48dd6b
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,1954 @@
+@@ -0,0 +1,1991 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -2132,9 +2132,10 @@ index 0000000..c497802
 +pub const VOICE_TRACK: &str = "Voce (Jarvis)";
 +pub const MUSIC_TRACK: &str = "Musica (Jarvis)";
 +
-+/// Le clip audio scelte per la separazione: (clip, file, inizio nel file, durata, tutto in secondi).
-+/// Contano le clip audio selezionate e l'audio collegato alle clip video selezionate.
-+pub fn stem_targets(s: &Session) -> Vec<(u64, String, f64, f64)> {
++/// Le clip audio scelte per la separazione, raggruppate per file: ogni file si separa UNA volta sola
++/// (dal primo all'ultimo pezzo usato), anche se è tagliato in cento clip.
++/// (file, inizio nel file, durata, clip con il loro inizio nel file), in secondi.
++pub fn stem_targets(s: &Session) -> Vec<(String, f64, f64, Vec<(u64, f64)>)> {
 +    let Some(q) = s.active_sequence() else { return Vec::new() };
 +    let sel = &s.state.selection;
 +    let links: std::collections::HashSet<u64> = q
@@ -2144,59 +2145,95 @@ index 0000000..c497802
 +        .filter(|it| sel.contains(&it.id))
 +        .filter_map(|it| it.link)
 +        .collect();
-+    let mut out = Vec::new();
++    let mut groups: Vec<(String, f64, f64, Vec<(u64, f64)>)> = Vec::new();
 +    for tr in &q.audio_tracks {
 +        if tr.name == VOICE_TRACK || tr.name == MUSIC_TRACK {
 +            continue;
 +        }
 +        for it in &tr.items {
-+            if !(sel.contains(&it.id) || it.link.is_some_and(|l| links.contains(&l))) || (it.speed - 1.0).abs() > 1e-6 || it.reverse {
++            if !it.enabled || !(sel.contains(&it.id) || it.link.is_some_and(|l| links.contains(&l))) || (it.speed - 1.0).abs() > 1e-6 || it.reverse {
 +                continue;
 +            }
 +            let Some((_, m, _)) = s.project.resolve_media(it.item) else { continue };
 +            let filmcraft_project::MediaRef::File { path } = &m.media else { continue };
-+            out.push((it.id.0, path.clone(), it.source_in.seconds(), it.duration.seconds()));
++            let (a, b) = (it.source_in.seconds(), it.source_in.seconds() + it.duration.seconds());
++            match groups.iter_mut().find(|g| &g.0 == path) {
++                Some(g) => {
++                    let end = (g.1 + g.2).max(b);
++                    g.1 = g.1.min(a);
++                    g.2 = end - g.1;
++                    g.3.push((it.id.0, a));
++                }
++                None => groups.push((path.clone(), a, b - a, vec![(it.id.0, a)])),
++            }
 +        }
 +    }
-+    out
++    groups
 +}
 +
++/// La cartella (bin) del progetto con questo nome, creata se non c'è.
++fn jarvis_bin(s: &mut Session, name: &str) -> Option<u64> {
++    let found = s.project.root.children.iter().find_map(|e| match e {
++        filmcraft_project::BinEntry::Bin(b) if b.name == name => Some(b.id.0),
++        _ => None,
++    });
++    found.or_else(|| s.execute("file.newBin", json!({"name": name})).ok().and_then(|r| r["bin"].as_u64()))
++}
++
++pub const STEMS_BIN: &str = "Jarvis · Audio separato";
++
 +/// Mette voce e musica separate su "Voce (Jarvis)" e "Musica (Jarvis)" al posto dell'audio
-+/// originale (che viene spento, non cancellato). Torna gli id delle clip di voce e di musica.
++/// originale (che viene spento, non cancellato). Un solo paio di file per sorgente, importato
++/// nella cartella "Jarvis · Audio separato"; ogni clip prende il suo pezzo.
 +fn place_stems(s: &mut Session, p: &Value) -> Result<Value> {
 +    let cmd = "jarvis.placeStems";
 +    let list = p["items"].as_array().ok_or_else(|| bad(cmd, "manca items"))?.clone();
 +    let seq_id = s.state.active_sequence.ok_or(EngineError::NoSequence)?;
 +    let rate = s.sequence_rate();
++    let bin = jarvis_bin(s, STEMS_BIN);
++    // (clip, voce, musica, inizio del file separato nella sorgente)
 +    let mut todo = Vec::new();
 +    for v in &list {
-+        let clip = ClipId(v["clip"].as_u64().ok_or_else(|| bad(cmd, "manca clip"))?);
++        let start = v["start"].as_f64().unwrap_or(0.0);
 +        let mut ids = Vec::new();
 +        for k in ["voice", "music"] {
 +            let path = v[k].as_str().ok_or_else(|| bad(cmd, "manca il file"))?.to_string();
 +            let item = match media_with_path(s, &path) {
 +                Some(i) => i,
 +                None => {
-+                    let r = s.execute("file.import", json!({"paths": [path.clone()]}))?;
++                    let mut ip = json!({"paths": [path.clone()]});
++                    if let Some(b) = bin {
++                        ip["bin"] = json!(b);
++                    }
++                    let r = s.execute("file.import", ip)?;
 +                    r["items"].as_array().and_then(|a| a.first()).and_then(Value::as_u64).map(filmcraft_project::ItemId).ok_or_else(|| bad(cmd, "non riesco a importare l'audio separato"))?
 +                }
 +            };
 +            ids.push(item);
 +        }
-+        todo.push((clip, ids[0], ids[1]));
++        for c in v["clips"].as_array().into_iter().flatten().filter_map(Value::as_u64) {
++            todo.push((ClipId(c), ids[0], ids[1], start));
++        }
 +    }
 +    let (voices, musics) = s.edit("Separa voce e musica", |pr, _st| {
 +        let q0 = pr.sequence(seq_id).ok_or(EngineError::NoSequence)?;
-+        let spans: Vec<(ClipId, filmcraft_project::ItemId, filmcraft_project::ItemId, Tick, Tick)> =
-+            todo.iter().filter_map(|(c, v, m)| q0.find_item(*c).map(|(_, it)| (*c, *v, *m, it.start, it.duration))).collect();
++        let spans: Vec<(ClipId, filmcraft_project::ItemId, filmcraft_project::ItemId, f64, Tick, Tick, Tick)> = todo
++            .iter()
++            .filter_map(|(c, v, m, st)| q0.find_item(*c).map(|(_, it)| (*c, *v, *m, *st, it.start, it.duration, it.source_in)))
++            .collect();
 +        let mut made: Vec<(ClipId, filmcraft_project::TrackItem, filmcraft_project::TrackItem)> = Vec::new();
-+        for (clip, vi, mi, start, dur) in spans {
++        for (clip, vi, mi, st, start, dur, sin) in spans {
++            let off = rate.snap(Tick((sin.0 - Tick::from_seconds_f64(st).0).max(0)));
 +            let mut one = |item: filmcraft_project::ItemId, name: &str| -> Option<filmcraft_project::TrackItem> {
 +                let len = match pr.item(item).map(|i| &i.kind) {
 +                    Some(filmcraft_project::ItemKind::Media(m)) => m.duration(),
 +                    _ => return None,
 +                };
-+                let mut ti = pr.make_track_item(item, TrackKind::Audio, start, TimeRange::new(Tick::ZERO, dur.min(len)), rate)?;
++                let d = Tick(dur.0.min((len.0 - off.0).max(0)));
++                if d.0 <= 0 {
++                    return None;
++                }
++                let mut ti = pr.make_track_item(item, TrackKind::Audio, start, TimeRange::new(off, d), rate)?;
 +                ti.name = name.to_string();
 +                Some(ti)
 +            };
@@ -3145,10 +3182,10 @@ index 0000000..13aeb0e
 +}
 diff --git a/crates/ui-egui/src/jarvis_audio.rs b/crates/ui-egui/src/jarvis_audio.rs
 new file mode 100644
-index 0000000..d7cbaab
+index 0000000..de22cf7
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_audio.rs
-@@ -0,0 +1,288 @@
+@@ -0,0 +1,289 @@
 +//! Jarvis: musica sotto la voce.
 +//! - "Abbassa la musica quando parlo": le clip selezionate diventano Musica con il ducking di
 +//!   Essential Sound contro tutto il resto (la voce), e si generano i keyframe del volume.
@@ -3175,7 +3212,7 @@ index 0000000..d7cbaab
 +
 +/// Le clip audio selezionate (con l'audio collegato alle clip video selezionate).
 +fn selected_audio(app: &FilmcraftApp) -> Vec<u64> {
-+    filmcraft_engine::jarvis::stem_targets(&app.session).into_iter().map(|t| t.0).collect()
++    filmcraft_engine::jarvis::stem_targets(&app.session).into_iter().flat_map(|g| g.3.into_iter().map(|c| c.0)).collect()
 +}
 +
 +/// Ducking: `music` sono le clip da abbassare; `voice` (se ci sono) diventano Dialogo.
@@ -3234,15 +3271,16 @@ index 0000000..d7cbaab
 +        return;
 +    }
 +    let dir = stems_dir(app);
-+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() % 1_000_000).unwrap_or(0);
++    // un solo paio di file per sorgente; stesso file e stesso tratto = stesso nome, così si riusa
 +    let items: Vec<Value> = targets
 +        .iter()
-+        .map(|(clip, path, start, dur)| {
++        .map(|(path, start, dur, clips)| {
 +            let stem = std::path::Path::new(path).file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "audio".into());
 +            let stem: String = stem.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '_' || *c == '-').take(40).collect();
-+            json!({"clip": clip, "path": path, "start": start, "dur": dur,
-+                   "voice": dir.join(format!("{stem}_{stamp}_{clip}_voce.wav")).to_string_lossy(),
-+                   "music": dir.join(format!("{stem}_{stamp}_{clip}_musica.wav")).to_string_lossy()})
++            let tag = format!("{}-{}", (start * 10.0) as i64, ((start + dur) * 10.0) as i64);
++            json!({"path": path, "start": start, "dur": dur, "clips": clips.iter().map(|c| c.0).collect::<Vec<_>>(),
++                   "voice": dir.join(format!("{stem}_{tag}_voce.wav")).to_string_lossy(),
++                   "music": dir.join(format!("{stem}_{tag}_musica.wav")).to_string_lossy()})
 +        })
 +        .collect();
 +    let job = tmp("separa_job.json");
@@ -3318,7 +3356,7 @@ index 0000000..d7cbaab
 +        .map(|a| {
 +            a.iter()
 +                .filter(|i| [i["voice"].as_str(), i["music"].as_str()].iter().all(|p| p.is_some_and(|p| std::path::Path::new(p).is_file())))
-+                .map(|i| json!({"clip": i["clip"], "voice": i["voice"], "music": i["music"]}))
++                .map(|i| json!({"clips": i["clips"], "start": i["start"], "voice": i["voice"], "music": i["music"]}))
 +                .collect()
 +        })
 +        .unwrap_or_default();

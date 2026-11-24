@@ -144,6 +144,10 @@ def run(job_path, out):
         res = []
         for k, it in enumerate(items):
             dur = float(it["dur"])
+            if all(os.path.exists(it[x]) and os.path.getsize(it[x]) > 1000 for x in ("voice", "music")):
+                res.append({"clip": it.get("clip"), "voice": it["voice"], "music": it["music"]})  # già fatto prima: si riusa
+                done += dur
+                continue
             mix = _read(it["path"], float(it["start"]), dur)
             if mix.shape[1] < SR // 10:
                 res.append({"clip": it.get("clip"), "error": "niente audio"})
