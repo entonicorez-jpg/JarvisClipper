@@ -224,8 +224,9 @@ def build_autoedit_xml(ed, src, info, cam, out_xml, name="Montaggio Jarvis", fx=
             return f"<keyframe><when>{when}</when><value>{v:.3f}</value>{ip}</keyframe>"
         keys = ""
         if kin > 1:
-            # entrata veloce che frena (come la preview): lineare -> bezier
-            keys += kf(0, 100, False) + kf(kin, big, True)
+            # entrata veloce; poi il tratto tenuto è lineare (piatto): una curva automatica tra due
+            # valori uguali ondeggia, e FilmCraft lo prende come movimento (motion blur a ogni fotogramma)
+            keys += kf(0, 100, False) + kf(kin, big, kout <= 1)
         if kout > 1:
             # uscita che parte piano e accelera: bezier -> lineare
             keys += kf(d - kout, big, True) + kf(d, 100, False)

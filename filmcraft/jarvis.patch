@@ -2571,6 +2571,78 @@ index 0a57a1a..172cbe8 100644
      Ok(out)
  }
  
+diff --git a/crates/render/src/gpufx.rs b/crates/render/src/gpufx.rs
+index 85f6df1..5a03ca8 100644
+--- a/crates/render/src/gpufx.rs
++++ b/crates/render/src/gpufx.rs
+@@ -470,7 +470,7 @@ impl FxOp {
+                 // With its own shutter angle the CPU blurs the motion over seven samples
+                 // (`vfx::distort::transform_fx`, under the same condition); the GPU op places one
+                 // picture, so this stays on the CPU rather than losing the blur
+-                if crate::vfx::bv(e, "shutter_override") && crate::vfx::fv(e, "shutter_angle", cx) > 0.5 {
++                if crate::vfx::bv(e, "shutter_override") && crate::vfx::fv(e, "shutter_angle", cx) > 0.5 && crate::vfx::distort::transform_moves(e, cx) {
+                     return None;
+                 }
+                 let img = Image { w, h, px: Vec::new() };
+diff --git a/crates/render/src/vfx.rs b/crates/render/src/vfx.rs
+index d9d40c7..9a6d84f 100644
+--- a/crates/render/src/vfx.rs
++++ b/crates/render/src/vfx.rs
+@@ -16,7 +16,7 @@ pub(crate) use blur::bokeh;
+ pub use blur::{KERNEL_REACH, bokeh_kernel};
+ mod color;
+ pub(crate) use color::cdl;
+-mod distort;
++pub(crate) mod distort;
+ mod immersive;
+ mod lights;
+ mod stylize;
+diff --git a/crates/render/src/vfx/distort.rs b/crates/render/src/vfx/distort.rs
+index 2dfe8b8..0ad66ff 100644
+--- a/crates/render/src/vfx/distort.rs
++++ b/crates/render/src/vfx/distort.rs
+@@ -234,10 +234,40 @@ pub fn rotate_3d(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+ }
+ 
+ /// Transform: affine place, with optional shutter-angle motion blur when the override is on.
++/// Jarvis: la Trasformazione si muove nel tratto dell'otturatore? Se è ferma (uno zoom tenuto),
++/// il motion blur a 7 campioni dà la stessa immagine: si fa un campione solo (e la GPU la può fare).
++pub(crate) fn transform_moves(e: &EffectInstance, cx: &FxCtx) -> bool {
++    let fps = cx.frame_rate.max(1.0);
++    let span = (fv(e, "shutter_angle", cx) as f64 / 360.0) / fps;
++    let at = |k: f64| -> [f32; 9] {
++        let cx2 = FxCtx { t: cx.t + Tick::from_seconds_f64(k * span), seconds: cx.seconds + k * span, ..*cx };
++        let im = Image { w: 1000, h: 1000, px: Vec::new() };
++        let a = crate::effects::point(e, "anchor", &cx2, &im);
++        let p = crate::effects::point(e, "position", &cx2, &im);
++        [
++            a.x as f32,
++            a.y as f32,
++            p.x as f32,
++            p.y as f32,
++            crate::effects::f(e, "scale_height", &cx2),
++            crate::effects::f(e, "scale_width", &cx2),
++            crate::effects::f(e, "rotation", &cx2),
++            crate::effects::f(e, "skew", &cx2),
++            crate::effects::f(e, "opacity", &cx2),
++        ]
++    };
++    let (x0, x1, x2) = (at(-0.5), at(0.0), at(0.5));
++    // sotto queste soglie il movimento in mezzo fotogramma è meno di mezzo pixel: la sfocatura non si vede
++    // (le curve automatiche di uno zoom "tenuto" ondeggiano di pochissimo)
++    const TOL: [f32; 9] = [0.5, 0.5, 0.5, 0.5, 0.04, 0.04, 0.03, 0.03, 0.3];
++    let same = |a: &[f32; 9], b: &[f32; 9]| a.iter().zip(b).zip(TOL).all(|((u, v), t)| (u - v).abs() < t);
++    !(same(&x0, &x1) && same(&x1, &x2))
++}
++
+ pub fn transform_fx(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+     let fps = cx.frame_rate.max(1.0);
+     let angle = fv(e, "shutter_angle", cx);
+-    let n = if bv(e, "shutter_override") && angle > 0.5 { 7 } else { 1 };
++    let n = if bv(e, "shutter_override") && angle > 0.5 && transform_moves(e, cx) { 7 } else { 1 };
+     let span = (angle as f64 / 360.0) / fps;
+     motion_blurred(img, n, |im, k| {
+         let t = cx.t + Tick::from_seconds_f64(k * span);
 diff --git a/crates/ui-egui/src/app.rs b/crates/ui-egui/src/app.rs
 index 250a7e2..db99a72 100644
 --- a/crates/ui-egui/src/app.rs
