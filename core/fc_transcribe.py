@@ -63,6 +63,52 @@ def _clean(words):
     return out
 
 
+def chunk(tr, path, t, d, lang="it"):
+    """Parole di [t, t+d] (secondi del file) con il modello caricato; None se non c'è audio."""
+    r = media.subprocess.run([media.ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", path,
+                              "-t", f"{d:.3f}", "-vn", "-ac", "1", "-ar", "16000", "-af", "highpass=f=80,dynaudnorm=f=150:g=15",
+                              "-f", "f32le", "-"], capture_output=True, creationflags=media.CREATE_NO_WINDOW)
+    audio = np.frombuffer(r.stdout, np.float32)
+    if len(audio) <= 3200:
+        return None
+    segs, _ = tr.model.transcribe(audio, language=lang, word_timestamps=True, beam_size=5,
+                                  vad_filter=True, vad_parameters={"min_silence_duration_ms": 300, "speech_pad_ms": 120},
+                                  condition_on_previous_text=False, no_speech_threshold=0.5,
+                                  initial_prompt=PROMPT.get(lang))
+    part = []
+    for s in segs:
+        for w in s.words or []:
+            txt = w.word.strip()
+            if txt and getattr(w, "probability", 1.0) > 0.08:
+                part.append({"w": txt, "s": round(t + w.start, 3), "e": round(t + w.end, 3)})
+    return part
+
+
+def cached(path, a, b):
+    """Parole già trascritte bene (modello grande) che coprono tutto [a, b], se ci sono."""
+    try:
+        with open(sidecar.path_for(path), encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        return None
+    if not any(x <= a + 0.05 and y >= b - 0.05 for x, y in d.get("hq", [])):
+        return None
+    return [w for w in d.get("words", []) if a <= w["s"] < b]
+
+
+def words_for(tr, path, a, b, lang="it"):
+    """Trascrizione buona per i sottotitoli di [a, b]: dalla cache se c'è, se no la fa (e la salva)."""
+    w = cached(path, a, b)
+    if w is not None:
+        return w
+    part = chunk(tr, path, a, b - a, lang) or []
+    sidecar.save(path, [{"words": part}], a, b, hq=bool(tr.gpu))
+    return _clean(part)
+
+
+load = _load
+
+
 def run(job_path, out):
     with open(job_path, encoding="utf-8") as f:
         job = json.load(f)
@@ -79,21 +125,8 @@ def run(job_path, out):
         while t < b - 0.05:
             d = min(240.0, b - t)
             _progress(out, done / total, f"Trascrivo con {'la scheda video' if tr.gpu else 'il processore'}… {int(done / total * 100)}%")
-            r = media.subprocess.run([media.ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", path,
-                                      "-t", f"{d:.3f}", "-vn", "-ac", "1", "-ar", "16000", "-af", "highpass=f=80,dynaudnorm=f=150:g=15",
-                                      "-f", "f32le", "-"], capture_output=True, creationflags=media.CREATE_NO_WINDOW)
-            audio = np.frombuffer(r.stdout, np.float32)
-            if len(audio) > 3200:
-                segs, _ = tr.model.transcribe(audio, language=lang, word_timestamps=True, beam_size=5,
-                                              vad_filter=True, vad_parameters={"min_silence_duration_ms": 300, "speech_pad_ms": 120},
-                                              condition_on_previous_text=False, no_speech_threshold=0.5,
-                                              initial_prompt=PROMPT.get(lang))
-                part = []
-                for s in segs:
-                    for w in s.words or []:
-                        txt = w.word.strip()
-                        if txt and getattr(w, "probability", 1.0) > 0.08:
-                            part.append({"w": txt, "s": round(t + w.start, 3), "e": round(t + w.end, 3)})
+            part = chunk(tr, path, t, d, lang)
+            if part is not None:
                 words += part
                 sidecar.save(path, [{"words": part}], t, t + d, hq=bool(tr.gpu))
             done += d

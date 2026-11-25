@@ -7,7 +7,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory, abort
 FROZEN = getattr(sys, "frozen", False)
 BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))  # file dell'app (sola lettura)
 sys.path.insert(0, BASE)
-from core import media, analyze, render, premiere, gpu, autoedit, updater, kdenlive, filmcraft, impara, layout as lay  # noqa: E402
+from core import media, analyze, render, shortfx, premiere, gpu, autoedit, updater, kdenlive, filmcraft, impara, layout as lay  # noqa: E402
 
 # dati scrivibili: accanto allo script, oppure in %LOCALAPPDATA%\JarvisClipper se è l'app installata
 DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "JarvisClipper") if FROZEN else BASE
@@ -90,8 +90,34 @@ def start_job(pid, name, fn):
             set_job(pid, running=False, error=msg, msg="Errore: " + msg, log="ERRORE " + msg)
         finally:
             JOBS[pid]["alive"] = False
+            if name != "previews" and PREVQ.get(pid):
+                start_job(pid, "previews", lambda: run_prev_queue(pid))
     threading.Thread(target=wrap, daemon=True).start()
     return True
+
+
+PREVQ = {}  # pid -> set di id clip con l'anteprima da rifare
+
+
+def queue_previews(pid, ids):
+    """Rifà le anteprime di queste clip appena può (anche mentre ne sta già facendo altre)."""
+    with LOCK:
+        PREVQ.setdefault(pid, set()).update(int(i) for i in ids)
+    start_job(pid, "previews", lambda: run_prev_queue(pid))
+
+
+def run_prev_queue(pid):
+    trh = {}
+    done = 0
+    while True:
+        with LOCK:
+            q = PREVQ.get(pid) or set()
+            if not q:
+                break
+            cid = min(q); q.discard(cid)
+            left = len(q)
+        render_previews(pid, only=[cid], trh=trh, label=f" ({done + 1}/{done + 1 + left})")
+        done += 1
 
 
 def stopped(pid):
@@ -266,9 +292,12 @@ def job_analyze(pid, opts):
     clips = analyze.analyze(p["src_path"], p["info"], p["layout"], c,
                             lambda f, m: set_job(pid, progress=0.9 * f, msg=m),
                             lambda m: set_job(pid, log=m), lambda: stopped(pid))
+    st = shortfx.settings(cfg())
+    half_full = load_half(pid)
     for cl in clips:
         cl["selected"] = cl["score"] >= 60
         cl["preview"] = None
+        cl["fx"] = shortfx.default_fx(cl, half_full, st)
     if c.get("impara", True):
         try:
             impara.learn()
@@ -287,18 +316,66 @@ def clip_censor(p, c):
     return W.censor_ranges(c.get("words") or [])
 
 
-def render_previews(pid, base=0.0, only=None):
+def clip_words(pid, p, c, trh):
+    """Parole buone per i sottotitoli della clip (modello grande sulla scheda video; salvate nella clip)."""
+    a, b = float(c["start"]), float(c["end"])
+    r = c.get("capw_range")
+    if c.get("capwords") is not None and r and r[0] <= a + 0.05 and r[1] >= b - 0.05:
+        return c["capwords"]
+    from core import fc_transcribe
+    if "tr" not in trh:
+        set_job(pid, msg="Carico il modello per i sottotitoli (la prima volta lo scarica, ~1,5 GB)…")
+        import gc
+        gc.collect()  # libera il modello della ricerca clip prima di caricare quello grande
+        trh["tr"] = fc_transcribe.load(cfg().get("lang", "it"), None)
+    set_job(pid, msg=f"Trascrivo la clip {c['id']} per i sottotitoli…")
+    ra, rb = max(0.0, a - 1.0), min(p["info"]["dur"], b + 1.0)
+    w = fc_transcribe.words_for(trh["tr"], p["src_path"], ra, rb, cfg().get("lang", "it"))
+    with LOCK:
+        q = load(pid)
+        for qc in q["clips"]:
+            if qc["id"] == c["id"]:
+                qc["capwords"], qc["capw_range"] = w, [ra, rb]
+        save(q)
+    return w
+
+
+def render_clip(pid, p, c, out, preview, trh, progress=lambda f: None):
+    """Short verticale della clip: con zoom/titolo/sottotitoli se ci sono, se no il render veloce."""
+    st = shortfx.settings(cfg())
+    fx = c.get("fx")
+    if fx is None:
+        fx = shortfx.default_fx(c, load_half(pid), st)
+        with LOCK:
+            q = load(pid)
+            for qc in q["clips"]:
+                if qc["id"] == c["id"]:
+                    qc["fx"] = fx
+            save(q)
+    words = None
+    if fx.get("caps"):
+        try:
+            words = clip_words(pid, p, c, trh)
+        except Exception as e:
+            set_job(pid, log=f"Sottotitoli della clip {c['id']} non fatti: {e}")
+    if shortfx.needs_fx(fx, st, words):
+        return shortfx.render(p["src_path"], p["info"], p["layout"], c["start"], c["end"], out, fx, st, words,
+                              preview=preview, censor=clip_censor(p, c), progress=progress, stop=lambda: stopped(pid))
+    return render.render(p["src_path"], p["info"], p["layout"], c["start"], c["end"], out, preview=preview, censor=clip_censor(p, c))
+
+
+def render_previews(pid, base=0.0, only=None, trh=None, label=""):
     p = load(pid)
+    trh = {} if trh is None else trh
     todo = [c for c in p["clips"] if (only is None or c["id"] in only)]
     for k, c in enumerate(todo):
         if stopped(pid):
             raise RuntimeError("Annullato")
-        set_job(pid, progress=base + (1 - base) * k / max(1, len(todo)),
-                msg=f"Preparo le anteprime verticali {k + 1}/{len(todo)}…")
+        msg = f"Preparo le anteprime verticali {k + 1}/{len(todo)}…" if not label else f"Aggiorno l'anteprima della clip {c['id']}{label}…"
+        set_job(pid, progress=base + (1 - base) * k / max(1, len(todo)), msg=msg)
         ver = int(time.time() * 1000) % 10 ** 8
         name = f"prev_{c['id']}_{ver}.mp4"
-        render.render(p["src_path"], p["info"], p["layout"], c["start"], c["end"],
-                      os.path.join(pdir(pid), name), preview=True, censor=clip_censor(p, c))
+        render_clip(pid, p, c, os.path.join(pdir(pid), name), True, trh)
         with LOCK:
             q = load(pid)
             for qc in q["clips"]:
@@ -321,6 +398,7 @@ def job_export(pid, ids, do_render, to_filmcraft=False):
         raise RuntimeError("Nessuna clip selezionata")
     out = p["out_dir"]; os.makedirs(out, exist_ok=True)
     rendered = {}
+    trh = {}
     if do_render:
         for k, c in enumerate(sel):
             if stopped(pid):
@@ -328,7 +406,8 @@ def job_export(pid, ids, do_render, to_filmcraft=False):
             set_job(pid, progress=k / len(sel), msg=f"Renderizzo la clip {k + 1}/{len(sel)} in 1080x1920…")
             safe = re.sub(r'[\\/:*?"<>|]+', "", c.get("title", ""))[:40].strip()
             fp = os.path.join(out, f"Clip_{c['id']:02d}_{c['score']}_{safe}.mp4".replace(" ", "_"))
-            render.render(p["src_path"], p["info"], p["layout"], c["start"], c["end"], fp, censor=clip_censor(p, c))
+            render_clip(pid, p, c, fp, False, trh,
+                        lambda f, k=k: set_job(pid, progress=(k + f) / len(sel)))
             rendered[c["id"]] = fp
     stamp = time.strftime("%Y%m%d_%H%M%S")
     kind = "FilmCraft" if to_filmcraft else "Premiere"
@@ -882,6 +961,7 @@ def api_analyze(pid):
 @app.route("/api/project/<pid>/clip/<int:cid>", methods=["POST"])
 def api_clip(pid, cid):
     data = request.json or {}
+    out = None
     with LOCK:
         p = load(pid)
         for c in p["clips"]:
@@ -894,10 +974,60 @@ def api_clip(pid, cid):
                     c["selected"] = bool(data["selected"])
                 if "title" in data:
                     c["title"] = str(data["title"])[:120]
+                if isinstance(data.get("fx"), dict):
+                    c["fx"] = clean_fx(data["fx"], c)
+                if data.get("autozoom"):
+                    fx = c.get("fx") or shortfx.default_fx(c, load_half(pid), shortfx.settings(cfg()))
+                    fx["zooms"] = shortfx.auto_zooms(c, load_half(pid), shortfx.settings(cfg()))
+                    c["fx"] = fx
+                out = c.get("fx")
         save(p)
     if data.get("rerender"):
-        start_job(pid, "previews", lambda: render_previews(pid, only=[cid]))
-    return jsonify({"ok": True})
+        queue_previews(pid, [cid])
+    return jsonify({"ok": True, "fx": out})
+
+
+def clean_fx(fx, c):
+    zs = []
+    for z in fx.get("zooms") or []:
+        try:
+            s0, e0 = float(z["s"]), float(z["e"])
+            if e0 - s0 >= 0.3:
+                zs.append({"s": round(s0, 2), "e": round(e0, 2), "z": max(1.02, min(2.5, float(z.get("z", 1.3))))})
+        except Exception:
+            pass
+    zs.sort(key=lambda z: z["s"])
+    for i, z in enumerate(zs):
+        z["id"] = i + 1
+    t = fx.get("title") or {}
+    try:
+        ts, te = float(t.get("s", c["start"])), float(t.get("e", c["end"]))
+    except Exception:
+        ts, te = c["start"], c["end"]
+    return {"zooms": zs, "caps": bool(fx.get("caps")),
+            "title": {"on": bool(t.get("on")), "text": str(t.get("text", ""))[:200], "s": round(ts, 2), "e": round(max(ts + 0.3, te), 2)}}
+
+
+@app.route("/api/shortfx", methods=["GET", "POST"])
+def api_shortfx():
+    """Stile degli short (uguale per tutte le clip): zoom, titolo, sottotitoli."""
+    c = cfg()
+    d = request.get_json(silent=True) if request.method == "POST" else None
+    if d:
+        cur = dict(c.get("short_fx") or {})
+        for k, v in (d.get("set") or {}).items():
+            if k in shortfx.DEFAULTS:
+                cur[k] = v
+        c["short_fx"] = cur
+        json.dump(c, open(CFG_PATH, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        pid = d.get("pid")
+        if pid and d.get("rerender"):
+            p = load(pid)
+            queue_previews(pid, [x["id"] for x in p.get("clips", [])])
+    st = shortfx.settings(cfg())
+    return jsonify({"set": st, "styles": [{"id": k, "name": v[0], "words": v[9]} for k, v in shortfx.STYLES.items()],
+                    "anims": [{"id": a, "name": n} for a, n in shortfx.ANIMS],
+                    "font_ok": bool(shortfx.font_path(st.get("font") or "Provicali"))})
 
 
 @app.route("/api/project/<pid>/export", methods=["POST"])

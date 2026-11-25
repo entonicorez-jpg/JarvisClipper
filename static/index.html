@@ -176,6 +176,35 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
 .trim .trh{position:absolute;top:1px;width:12px;height:24px;margin-left:-6px;border-radius:4px;background:#fff;box-shadow:0 1px 4px #0008;cursor:ew-resize}
 .trim .trh:hover{transform:scaleY(1.08)}
 .trhint{font-size:11px;color:var(--mut);margin:0 4px 6px}
+/* ---------- monta lo short: zoom, titolo, sottotitoli ---------- */
+.fxbtn{align-self:flex-start;border-color:#2f6d1f}
+.fxsum{font-size:12px;color:var(--mut)}
+#fxm .box{width:min(1180px,96vw);max-height:94vh;overflow:auto;padding:18px 20px}
+.fxhead{display:flex;align-items:center;gap:10px;margin-bottom:12px}.fxhead b{font-size:17px}.fxhead .sp{flex:1}
+.fxgrid{display:grid;grid-template-columns:300px 1fr;gap:18px}
+.fxvid video{width:300px;aspect-ratio:9/16;background:#000;border-radius:14px;display:block}
+.fxtl{position:relative;background:#0e1115;border:1px solid var(--line);border-radius:12px;padding:6px 10px 8px 92px;user-select:none;touch-action:none}
+.fxrow{position:relative;height:34px;margin:6px 0;border-radius:8px;background:#161a21}
+.fxrow .lab{position:absolute;left:-86px;top:8px;width:80px;font-size:12px;color:var(--mut);white-space:nowrap}
+.fxruler{position:relative;height:20px;cursor:pointer;border-bottom:1px solid var(--line)}
+.fxruler span{position:absolute;top:2px;font-size:10px;color:var(--mut);transform:translateX(-50%)}
+.fxph{position:absolute;top:0;bottom:0;width:2px;background:#ff3d5a;pointer-events:none;z-index:5}
+.fxb{position:absolute;top:3px;bottom:3px;border-radius:7px;cursor:grab;display:flex;align-items:center;overflow:hidden;font-size:11px;font-weight:700;color:#071007;padding:0 8px;white-space:nowrap}
+.fxb .h{position:absolute;top:0;bottom:0;width:9px;cursor:ew-resize;background:#fff6}
+.fxb .h.l{left:0}.fxb .h.r{right:0}
+.fxb.zoom{background:linear-gradient(90deg,#53fc18 0,#53fc18 12%,#2b8f10 30%,#1b3d12 100%)}
+.fxb.zoom.sel{outline:2px solid #fff}
+.fxb.title{background:linear-gradient(90deg,#00e0ff,#7b5cff);color:#fff}
+.fxw{position:absolute;top:8px;bottom:8px;border-radius:4px;background:#ffb02088;border:1px solid #ffb020}
+.fxsec{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-top:12px}
+.fxsec h4{margin:0 0 8px;font-size:13px;display:flex;align-items:center;gap:8px}
+.fxsec .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:6px 0}
+.fxsec label{font-size:12px;color:var(--mut);display:flex;align-items:center;gap:6px}
+.fxsec input[type=text]{padding:7px 10px}.fxsec select{padding:6px 8px}
+.fxsec input[type=range]{width:120px;accent-color:var(--acc)}
+.fxglob{font-size:11px;color:var(--warm)}
+#fxm label{flex-direction:row;margin:0;align-items:center}
+#fxm .fxtl .lab{display:block}
 </style>
 </head>
 <body>
@@ -441,6 +470,44 @@ details p{margin:6px 0 0;max-height:110px;overflow:auto;color:#c5ccd6}
     <button onclick="closeCfg()">Annulla</button><button class="pri" onclick="saveCfg()">Salva</button></div>
 </div></div>
 
+<div class="modal" id="fxm"><div class="box">
+  <div class="fxhead"><b>🎬 Monta lo short</b><span class="hint" id="fxName"></span><span class="sp"></span><span class="hint" id="fxMsg"></span><button onclick="fxClose()">Fatto ✓</button></div>
+  <div class="fxgrid">
+    <div class="fxvid"><video id="fxv" controls playsinline loop></video><div class="hint" style="margin-top:6px">L'anteprima si aggiorna da sola dopo ogni modifica.</div></div>
+    <div>
+      <div class="fxtl" id="fxtl"></div>
+      <div class="hint" style="margin-top:4px">Trascina i blocchi per spostarli e i bordi per allungarli · <b>doppio clic</b> sulla corsia ZOOM = nuovo zoom lì · clic su uno zoom + <span class="kbd">Canc</span> = toglilo · clic sul righello = vai a quel punto</div>
+      <div class="fxsec"><h4>🔍 Zoom su di te <span class="hint">entra veloce col motion blur, poi dezooma piano fino alla clip normale</span></h4>
+        <div class="row"><button class="sm" onclick="fxAuto()">🪄 Rifai gli zoom automatici</button><button class="sm" onclick="fxZoomsClear()">Togli tutti</button>
+          <label id="fxZsel" style="display:none">Zoom selezionato <input type="range" min="110" max="180" id="fxZv" oninput="fxZoomVal(this.value)"> <b id="fxZvT"></b></label></div>
+        <div class="row"><label>Forza degli zoom automatici <input type="range" min="110" max="180" id="gZoom" onchange="fxGlob({zoom:this.value/100},false)"> <b id="gZoomT"></b></label>
+          <label>Durata (dezoom) <input type="range" min="12" max="50" id="gZlen" onchange="fxGlob({zoom_len:this.value/10},false)"> <b id="gZlenT"></b></label>
+          <label class="tog" style="margin:0"><input type="checkbox" id="gZon" onchange="fxGlob({zoom_on:this.checked},false)"> metti gli zoom nelle clip nuove</label></div>
+      </div>
+      <div class="fxsec"><h4>🏷️ Titolo TikTok <label class="tog" style="margin:0"><input type="checkbox" id="fxTon" onchange="fxSet(f=>f.title.on=this.checked)"> mostra</label></h4>
+        <div class="row"><input type="text" id="fxTtext" style="flex:1;min-width:260px" placeholder="Scrivi il titolo (anche con emoji 😱🔥)" oninput="fxSet(f=>{f.title.text=this.value;if(this.value.trim())f.title.on=true;$('#fxTon').checked=f.title.on},true)">
+          <button class="sm" onclick="fxTitleAll()">⏱ Per tutta la clip</button></div>
+        <div class="row"><label>Grandezza <input type="range" min="50" max="130" id="gTsize" onchange="fxGlob({title_size:+this.value})"></label>
+          <label>Altezza <input type="range" min="5" max="90" id="gTy" onchange="fxGlob({title_y:this.value/100})"></label>
+          <label><input type="checkbox" id="gTup" onchange="fxGlob({title_upper:this.checked})"> TUTTO MAIUSCOLO</label>
+          <label><input type="checkbox" id="gTz" onchange="fxGlob({title_zoom:this.checked})"> zooma anche il titolo</label>
+          <span class="fxglob">vale per tutte le clip</span></div>
+      </div>
+      <div class="fxsec"><h4>💬 Sottotitoli <label class="tog" style="margin:0"><input type="checkbox" id="fxCon" onchange="fxSet(f=>f.caps=this.checked)"> in questa clip</label><span class="hint">stanno sotto lo zoom: quando zoomma, zoommano anche loro</span></h4>
+        <div class="row"><label>Stile <select id="gStyle" onchange="fxGlob({style:this.value})"></select></label>
+          <label>Font <input type="text" id="gFont" style="width:130px" onchange="fxGlob({font:this.value.trim()||'Provicali'})"></label><span id="gFontW" class="hint"></span>
+          <label>Parole <select id="gWords" onchange="fxGlob({words:+this.value})"><option value="0">come lo stile</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+          <label>Animazione <select id="gAnim" onchange="fxGlob({anim:this.value})"></select></label></div>
+        <div class="row"><label>Grandezza <input type="range" min="50" max="180" id="gCsize" onchange="fxGlob({cap_size:+this.value})"></label>
+          <label>Altezza <input type="range" min="10" max="92" id="gCy" onchange="fxGlob({cap_y:this.value/100})"></label>
+          <label>Maiuscolo <select id="gUp" onchange="fxGlob({upper:this.value===''?null:this.value==='1'})"><option value="">come lo stile</option><option value="1">sì</option><option value="0">no</option></select></label>
+          <label><input type="checkbox" id="gCens" onchange="fxGlob({censor:this.checked})"> censura le parolacce (c***o)</label>
+          <label><input type="checkbox" id="gCon" onchange="fxGlob({caps_on:this.checked},false)"> nelle clip nuove</label>
+          <span class="fxglob">vale per tutte le clip</span></div>
+      </div>
+    </div>
+  </div>
+</div></div>
 <div class="big" id="big" onclick="closeBig(event)"><video id="bigv" controls autoplay></video></div>
 <div class="modal prevmodal" id="prevModal" onclick="if(event.target.id==='prevModal'){this.classList.remove('on');$('#prevV').pause()}"><video id="prevV" controls autoplay></video></div>
 
@@ -528,7 +595,7 @@ async function refresh(){
     const hasClips=(p.clips||[]).length>0;
     $('#clipSec').classList.toggle('hidden',!hasClips);$('#foot').classList.toggle('hidden',!hasClips);$('#relayBtn').classList.toggle('hidden',!hasClips);
     if(hasClips)$('#anBtn').textContent='🔁 Rianalizza';
-    const sig=JSON.stringify((p.clips||[]).map(c=>[c.id,c.preview,c.start,c.end,c.score,c.selected,c.title]));
+    const sig=JSON.stringify((p.clips||[]).map(c=>[c.id,c.preview,c.start,c.end,c.score,c.selected,c.title,c.fx]));fxPoll(p);
     if(sig!==lastClipsSig){lastClipsSig=sig;drawClips()}
     if(p.last_export&&j.name==='export'&&!j.running&&!j.error) showDone(p.last_export);
   }
@@ -541,6 +608,75 @@ async function refresh(){
 }
 function toggleLog(){const l=$('#jlog');l.style.display=l.style.display==='block'?'none':'block'}
 async function stopJob(){await api(`/api/project/${PID}/stop`,{})}
+/* ---------- monta lo short: zoom su di te, titolo TikTok a tempo, sottotitoli sotto lo zoom ---------- */
+let FX=null, FXS=null, FXT=null, FXG=null;
+function fxSum(c){const f=c.fx;if(!f)return '';const a=[];if(f.zooms&&f.zooms.length)a.push('🔍 '+f.zooms.length+' zoom');if(f.title&&f.title.on&&f.title.text)a.push('🏷️ titolo');if(f.caps)a.push('💬 sottotitoli');return a.join(' · ')}
+async function fxOpen(id){
+  let c=P.clips.find(x=>x.id===id);
+  if(!c.fx){const r=await api(`/api/project/${PID}/clip/${id}`,{autozoom:true});c.fx=r.fx}
+  FX={id,a:c.start,b:c.end,fx:JSON.parse(JSON.stringify(c.fx)),sel:-1,preview:c.preview,words:c.capwords||[]};
+  if(!FX.fx.title)FX.fx.title={on:false,text:'',s:c.start,e:Math.min(c.end,c.start+4)};
+  $('#fxName').textContent=`· clip ${id} · ${(c.end-c.start).toFixed(0)}s`;$('#fxMsg').textContent='';
+  const v=$('#fxv');v.src=c.preview?`/p/${PID}/${c.preview}`:'';
+  $('#fxTon').checked=!!FX.fx.title.on;$('#fxTtext').value=FX.fx.title.text||'';$('#fxCon').checked=!!FX.fx.caps;
+  await fxLoadGlob();fxDraw();$('#fxm').classList.add('on');
+  v.ontimeupdate=fxPh;
+}
+function fxClose(){if(FXT){clearTimeout(FXT);fxSave()}$('#fxv').pause();$('#fxm').classList.remove('on');FX=null}
+async function fxLoadGlob(){const r=await api('/api/shortfx');FXS=r;const s=r.set;
+  $('#gStyle').innerHTML=r.styles.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');$('#gStyle').value=s.style;
+  $('#gAnim').innerHTML=r.anims.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');$('#gAnim').value=s.anim;
+  $('#gFont').value=s.font||'Provicali';$('#gFontW').innerHTML=r.font_ok?'':'⚠️ font non trovato sul PC: uso quello dello stile';
+  $('#gWords').value=String(s.words||0);$('#gUp').value=s.upper==null?'':(s.upper?'1':'0');
+  $('#gCsize').value=s.cap_size;$('#gCy').value=Math.round(s.cap_y*100);$('#gCens').checked=!!s.censor;$('#gCon').checked=!!s.caps_on;
+  $('#gTsize').value=s.title_size;$('#gTy').value=Math.round((s.title_y==null?(P.layout&&P.layout.cam&&P.layout.mode!=='full'?(P.layout.split||0.4):0.2):s.title_y)*100);
+  $('#gTup').checked=!!s.title_upper;$('#gTz').checked=!!s.title_zoom;
+  $('#gZoom').value=Math.round(s.zoom*100);$('#gZoomT').textContent=Math.round(s.zoom*100)+'%';$('#gZlen').value=Math.round(s.zoom_len*10);$('#gZlenT').textContent=s.zoom_len.toFixed(1)+' s';$('#gZon').checked=!!s.zoom_on}
+async function fxGlob(set,rer=true){if(!PID)return;$('#fxMsg').textContent=rer?'⏳ aggiorno le anteprime di tutte le clip…':'';
+  const r=await api('/api/shortfx',{set,pid:PID,rerender:rer});FXS.set=r.set;
+  $('#gZoomT').textContent=Math.round(r.set.zoom*100)+'%';$('#gZlenT').textContent=r.set.zoom_len.toFixed(1)+' s';$('#gFontW').innerHTML=r.font_ok?'':'⚠️ font non trovato sul PC: uso quello dello stile'}
+function fxSet(fn,slow){if(!FX)return;fn(FX.fx);fxDraw();fxQueue(slow?1400:500)}
+function fxQueue(ms){$('#fxMsg').textContent='✏️ modificato…';clearTimeout(FXT);FXT=setTimeout(fxSave,ms)}
+async function fxSave(){FXT=null;if(!FX)return;const id=FX.id;$('#fxMsg').textContent='⏳ aggiorno l\'anteprima…';
+  const r=await api(`/api/project/${PID}/clip/${id}`,{fx:FX.fx,rerender:true});const c=P.clips.find(x=>x.id===id);if(c&&r.fx)c.fx=r.fx}
+function fxPoll(p){if(!FX)return;const c=(p.clips||[]).find(x=>x.id===FX.id);if(!c)return;
+  if(c.capwords&&c.capwords.length!==FX.words.length){FX.words=c.capwords;fxDraw()}
+  if(c.preview&&c.preview!==FX.preview){FX.preview=c.preview;const v=$('#fxv'),t=v.currentTime,pl=!v.paused;v.src=`/p/${PID}/${c.preview}`;v.onloadedmetadata=()=>{try{v.currentTime=Math.min(t,v.duration-0.05)}catch(e){};if(pl)v.play()};if(!FXT)$('#fxMsg').textContent='✅ anteprima aggiornata'}}
+function fxX(t){return ((t-FX.a)/(FX.b-FX.a)*100)}
+function fxT(ev,el){const r=el.getBoundingClientRect();return FX.a+Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width))*(FX.b-FX.a)}
+function fxDraw(){if(!FX)return;const f=FX.fx,d=FX.b-FX.a;let h='<div class="fxruler" id="fxRul">';
+  const step=d>40?10:(d>15?5:2);for(let s=0;s<=d;s+=step)h+=`<span style="left:${s/d*100}%">${s}s</span>`;h+='</div>';
+  h+='<div class="fxrow" id="fxRz"><span class="lab">🔍 Zoom</span>'+f.zooms.map((z,i)=>`<div class="fxb zoom ${i===FX.sel?'sel':''}" data-i="${i}" style="left:${fxX(z.s)}%;width:${fxX(z.e)-fxX(z.s)}%" title="${Math.round(z.z*100)}% · ${(z.e-z.s).toFixed(1)} s"><div class="h l"></div>${Math.round(z.z*100)}%<div class="h r"></div></div>`).join('')+'</div>';
+  const t=f.title;h+='<div class="fxrow" id="fxRt"><span class="lab">🏷️ Titolo</span>'+(t.on&&t.text?`<div class="fxb title" data-k="t" style="left:${fxX(Math.max(FX.a,t.s))}%;width:${fxX(Math.min(FX.b,t.e))-fxX(Math.max(FX.a,t.s))}%"><div class="h l"></div>${esc(t.text)}<div class="h r"></div></div>`:'<span class="hint" style="position:absolute;left:10px;top:9px">spento: scrivi un titolo sotto</span>')+'</div>';
+  h+='<div class="fxrow"><span class="lab">💬 Sottotitoli</span>'+(f.caps?(FX.words.length?FX.words.filter(w=>w.e>FX.a&&w.s<FX.b).map(w=>`<div class="fxw" style="left:${fxX(Math.max(FX.a,w.s))}%;width:${Math.max(0.3,fxX(Math.min(FX.b,w.e))-fxX(Math.max(FX.a,w.s)))}%" title="${esc(w.w)}"></div>`).join(''):'<span class="hint" style="position:absolute;left:10px;top:9px">si creano con la prossima anteprima</span>'):'<span class="hint" style="position:absolute;left:10px;top:9px">spenti</span>')+'</div>';
+  h+='<div class="fxph" id="fxPh"></div>';
+  $('#fxtl').innerHTML=h;fxPh();
+  $('#fxRul').onpointerdown=e=>{const v=$('#fxv');if(v.duration)v.currentTime=Math.min(v.duration-0.05,fxT(e,e.currentTarget)-FX.a)};
+  const rz=$('#fxRz');rz.ondblclick=e=>{if(e.target!==rz)return;const t=fxT(e,rz),L=FXS?FXS.set.zoom_len:2.4,Z=FXS?FXS.set.zoom:1.3;
+    fxSet(f=>{f.zooms.push({s:+t.toFixed(2),e:+Math.min(FX.b,t+L).toFixed(2),z:Z});f.zooms.sort((a,b)=>a.s-b.s)});FX.sel=FX.fx.zooms.findIndex(z=>Math.abs(z.s-t)<0.01);fxDraw()};
+  rz.onpointerdown=e=>{if(e.target===rz){FX.sel=-1;fxSelUI();rz.querySelectorAll('.fxb').forEach(x=>x.classList.remove('sel'))}};
+  document.querySelectorAll('#fxtl .fxb').forEach(b=>b.onpointerdown=e=>{e.preventDefault();e.stopPropagation();b.setPointerCapture(e.pointerId);
+    const isT=b.dataset.k==='t',o=isT?f.title:f.zooms[+b.dataset.i],row=b.parentElement,mode=e.target.classList.contains('l')?'l':(e.target.classList.contains('r')?'r':'m');
+    if(!isT){FX.sel=+b.dataset.i;fxSelUI();document.querySelectorAll('#fxRz .fxb').forEach(x=>x.classList.toggle('sel',x===b))}
+    const t0=fxT(e,row),s0=o.s,e0=o.e;let moved=false;
+    b.onpointermove=ev=>{const dt=fxT(ev,row)-t0;if(Math.abs(dt)>0.02)moved=true;
+      if(mode==='m'){const len=e0-s0;let ns=Math.max(FX.a,Math.min(FX.b-len,s0+dt));o.s=+ns.toFixed(2);o.e=+(ns+len).toFixed(2)}
+      else if(mode==='l')o.s=+Math.max(FX.a,Math.min(o.e-0.4,s0+dt)).toFixed(2);else o.e=+Math.min(FX.b,Math.max(o.s+0.4,e0+dt)).toFixed(2);
+      b.style.left=fxX(Math.max(FX.a,o.s))+'%';b.style.width=(fxX(Math.min(FX.b,o.e))-fxX(Math.max(FX.a,o.s)))+'%'};
+    b.onpointerup=()=>{b.onpointermove=null;b.onpointerup=null;if(moved){if(!isT)f.zooms.sort((a,c)=>a.s-c.s);FX.sel=isT?FX.sel:f.zooms.indexOf(o);fxDraw();fxQueue(500)}
+      const v=$('#fxv');if(v.duration)v.currentTime=Math.max(0,o.s-FX.a-0.3)}})}
+function fxPh(){const el=$('#fxPh');if(!el||!FX)return;const v=$('#fxv');const t=FX.a+(v.currentTime||0);const L=92,tl=$('#fxtl');const w=tl.clientWidth-L-10;el.style.left=(L+w*Math.max(0,Math.min(1,(t-FX.a)/(FX.b-FX.a))))+'px'}
+function fxSelUI(){const z=FX&&FX.sel>=0?FX.fx.zooms[FX.sel]:null;$('#fxZsel').style.display=z?'':'none';if(z){$('#fxZv').value=Math.round(z.z*100);$('#fxZvT').textContent=Math.round(z.z*100)+'%'}}
+function fxZoomVal(v){if(!FX||FX.sel<0)return;FX.fx.zooms[FX.sel].z=v/100;$('#fxZvT').textContent=v+'%';fxDraw();fxQueue(900)}
+async function fxAuto(){if(!FX)return;$('#fxMsg').textContent='⏳ cerco le tue reazioni…';const r=await api(`/api/project/${PID}/clip/${FX.id}`,{autozoom:true,rerender:true});
+  if(r.fx){FX.fx.zooms=r.fx.zooms;FX.sel=-1;fxSelUI();fxDraw();$('#fxMsg').textContent=r.fx.zooms.length?`⏳ ${r.fx.zooms.length} zoom: aggiorno l'anteprima…`:'Nessuna reazione forte trovata: aggiungili tu con doppio clic'}}
+function fxZoomsClear(){fxSet(f=>f.zooms=[]);FX.sel=-1;fxSelUI()}
+function fxTitleAll(){fxSet(f=>{f.title.s=FX.a;f.title.e=FX.b;f.title.on=!!f.title.text.trim()})}
+window.addEventListener('keydown',e=>{if(!FX||!$('#fxm').classList.contains('on')||/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName))return;
+  if((e.key==='Delete'||e.key==='Backspace')&&FX.sel>=0){e.preventDefault();const i=FX.sel;FX.sel=-1;fxSelUI();fxSet(f=>f.zooms.splice(i,1))}
+  if(e.key===' '){e.preventDefault();const v=$('#fxv');v.paused?v.play():v.pause()}
+  if(e.key==='Escape')fxClose()});
+
 async function openFolder(){await api(`/api/project/${PID}/open`,{})}
 
 /* ---------- timeline generica (zoom con rotellina, scorrimento) ---------- */
@@ -720,6 +856,7 @@ function drawClips(){
         <div class="time">⏱ ${tc(c.start)} → ${tc(c.end)} · <b>${d}s</b>${c.score_ai!=null?` · regole ${c.score_regole} / AI ${c.score_ai}`:''}</div>
         <div class="trim" id="tr${c.id}" data-id="${c.id}"><div class="trbar"></div><div class="trsel"></div><div class="trh" data-k="start" title="trascina: inizio"></div><div class="trh" data-k="end" title="trascina: fine"></div></div>
         <div class="trhint">Trascina le maniglie per tagliare o allungare la clip</div>
+        <button class="sm fxbtn" onclick="fxOpen(${c.id})">🎬 Zoom, titolo e sottotitoli</button><span class="fxsum">${fxSum(c)}</span>
         ${c.hook?`<div class="chip" style="border-color:var(--acc2)">🎣 Hook: ${esc(c.hook)}</div>`:''}
         <div class="chips">${(c.reasons||[]).map(r=>`<span class="chip">${esc(r.t)}</span>`).join('')}</div>
         ${(c.warnings||[]).map(w=>`<div class="warn">${esc(w)}</div>`).join('')}
@@ -738,7 +875,7 @@ function trimInit(c){const el=document.querySelector('#tr'+c.id);if(!el)return;t
     h.onpointermove=e=>{let t=a+(e.clientX-r.left)/r.width*(b-a);t=Math.round(t*10)/10;
       if(k==='start')c.start=Math.max(0,Math.min(t,c.end-3));else c.end=Math.min(P.info.dur,Math.max(t,c.start+3));trimDraw(c);
       document.querySelector(`#c${c.id} .time`).innerHTML=`⏱ ${tc(c.start)} → ${tc(c.end)} · <b>${(c.end-c.start).toFixed(1)}s</b>`};
-    h.onpointerup=()=>{h.onpointermove=null;h.onpointerup=null;document.querySelector(`#c${c.id} .time`).innerHTML+=' · <i>aggiorno l\'anteprima…</i>';setClip(c.id,{start:c.start,end:c.end,rerender:true})}}})}
+    const s0=c.start;h.onpointerup=()=>{h.onpointermove=null;h.onpointerup=null;document.querySelector(`#c${c.id} .time`).innerHTML+=' · <i>aggiorno l\'anteprima…</i>';const d={start:c.start,end:c.end,rerender:true};const T=c.fx&&c.fx.title;if(T&&k==='start'&&Math.abs(T.s-s0)<0.06){T.e=+(T.e+c.start-s0).toFixed(2);T.s=c.start;d.fx=c.fx}setClip(c.id,d)}}})}
 const nudT={};
 function nud(id,k,dv){const c=P.clips.find(x=>x.id===id);c[k]=Math.max(0,+(c[k]+dv).toFixed(2));if(c.end-c.start<3)return;
   document.querySelector(`#c${id} .time`).innerHTML=`⏱ ${tc(c.start)} → ${tc(c.end)} · <b>${(c.end-c.start).toFixed(0)}s</b> · <i>aggiorno…</i>`;
