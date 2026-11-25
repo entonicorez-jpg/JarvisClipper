@@ -228,7 +228,7 @@ def ytdl(pid, url, tmpl):
         path = rd[0].get("filepath") if rd else y.prepare_filename(info)
     if not os.path.exists(path):
         base = os.path.splitext(path)[0]
-        for ext in (".mp4", ".mkv", ".ts", ".webm"):
+        for ext in (".mp4", ".mkv", ".ts", ".mpg", ".webm"):
             if os.path.exists(base + ext):
                 path = base + ext; break
     return path
@@ -812,7 +812,7 @@ def api_pick_file():
         try:
             import webview
             r = WINDOW.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=(
-                "Video (*.mp4;*.mkv;*.mov;*.flv;*.ts;*.webm;*.avi)", "Tutti i file (*.*)"))
+                "Video (*.mp4;*.mkv;*.mov;*.flv;*.ts;*.mpg;*.mpeg;*.m2ts;*.mts;*.m4v;*.webm;*.avi;*.wmv)", "Tutti i file (*.*)"))
             return jsonify({"path": (r[0] if r else "") or ""})
         except Exception as e:
             return jsonify({"path": "", "error": str(e)})
@@ -821,7 +821,7 @@ def api_pick_file():
         from tkinter import filedialog
         root = tk.Tk(); root.withdraw(); root.attributes("-topmost", True)
         f = filedialog.askopenfilename(title="Scegli il VOD o la registrazione", filetypes=[
-            ("Video", "*.mp4 *.mkv *.mov *.flv *.ts *.webm *.avi"), ("Tutti", "*.*")])
+            ("Video", "*.mp4 *.mkv *.mov *.flv *.ts *.mpg *.mpeg *.m2ts *.mts *.m4v *.webm *.avi *.wmv"), ("Tutti", "*.*")])
         root.destroy()
         return jsonify({"path": f or ""})
     except Exception as e:
