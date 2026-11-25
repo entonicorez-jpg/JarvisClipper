@@ -296,10 +296,10 @@ index 44399e4..f4606e8 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..e07d017
+index 0000000..0e2cd2e
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,2393 @@
+@@ -0,0 +1,2562 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -1320,6 +1320,7 @@ index 0000000..e07d017
 +            Ok(json!({"sfx": n}))
 +        }),
 +        spec("jarvis.composerItem", "Jarvis: Transizione Premiere Composer", r#"{"path":str,"time":ticks?,"scope":"playhead|selection|all"?,"sfx":bool?,"sfxGain":f?}"#, mh_apply),
++        spec("jarvis.makeShort", "Jarvis: Trasforma in short", r#"{"layout":{"cam":{x,y,w,h}?,"game":{x,y,w,h},"split":f?,"margin":f?},"bg":"game|cam|none"?}"#, make_short),
 +        spec("jarvis.animate", "Jarvis: Animazione entrata/uscita", r#"{"in":str?,"out":str?,"framesIn":n?,"framesOut":n?,"sfx":bool?,"sfxGain":f?}"#, clip_animate),
 +        spec("jarvis.placeStems", "Jarvis: Voce e musica separate", r#"{"items":[{"clip":id,"voice":str,"music":str}]}"#, place_stems),
 +        spec("jarvis.clipFx", "Jarvis: Effetto clip", r#"{"preset":"punch|zoom_in|zoom_out|shake","amount":f?}"#, clip_fx),
@@ -2693,6 +2694,174 @@ index 0000000..e07d017
 +    }
 +    Ok(json!({"clips": n, "sfx": sfx}))
 +}
++
++// ---------------------------------------------------------------- Trasforma in short (come Jarvis Clipper)
++
++/// Un rettangolo della sorgente (pixel) riportato all'aspetto `aspect` (larghezza/altezza), centrato.
++fn rect_aspect(r: (f64, f64, f64, f64), aspect: f64, sw: f64, sh: f64) -> (f64, f64, f64, f64) {
++    let (x, y, mut w, mut h) = r;
++    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
++    if w / h > aspect {
++        w = h * aspect;
++    } else {
++        h = w / aspect;
++    }
++    let x = (cx - w / 2.0).clamp(0.0, (sw - w).max(0.0));
++    let y = (cy - h / 2.0).clamp(0.0, (sh - h).max(0.0));
++    (x, y, w.min(sw), h.min(sh))
++}
++
++/// Ritaglio + Movimento per mettere il rettangolo `r` della sorgente (sw×sh) dentro il riquadro
++/// (larghezza fw, altezza fh, centro cx, cy) del verticale: "cover" lo riempie, "contain" ci sta dentro.
++fn place_rect(it: &mut filmcraft_project::TrackItem, r: (f64, f64, f64, f64), sw: f64, sh: f64, fw: f64, fh: f64, cx: f64, cy: f64, cover: bool) {
++    let (x, y, w, h) = r;
++    let k = if cover { (fw / w).max(fh / h) } else { (fw / w).min(fh / h) };
++    if let Some(mut c) = fx_instance("crop") {
++        let pc = |v: f64| Param::new(ParamValue::Float((v * 100.0).clamp(0.0, 100.0)));
++        c.params.insert("left".into(), pc(x / sw));
++        c.params.insert("right".into(), pc((sw - x - w) / sw));
++        c.params.insert("top".into(), pc(y / sh));
++        c.params.insert("bottom".into(), pc((sh - y - h) / sh));
++        it.effects.push(c);
++    }
++    if let Some(m) = it.effect_mut("motion") {
++        let (dx, dy) = (x + w / 2.0 - sw / 2.0, y + h / 2.0 - sh / 2.0);
++        m.params.insert("scale".into(), Param::new(ParamValue::Float(k * 100.0)));
++        m.params.insert("position".into(), Param::new(ParamValue::Vec2(Vec2::new(cx - dx * k, cy - dy * k))));
++    }
++}
++
++/// Le clip video da trasformare: quelle selezionate, o tutte quelle della traccia più bassa.
++pub fn short_targets(s: &Session) -> Vec<(ClipId, filmcraft_project::ItemId, String, f64, f64)> {
++    let Some(q) = s.active_sequence() else { return Vec::new() };
++    let media = |it: &filmcraft_project::TrackItem| -> Option<(String, f64, f64)> {
++        let (_, m, _) = s.project.resolve_media(it.item)?;
++        let filmcraft_project::MediaRef::File { path } = &m.media else { return None };
++        let v = m.info.video.as_ref()?;
++        Some((path.clone(), v.width as f64, v.height as f64))
++    };
++    let sel: Vec<_> = q.video_tracks.iter().flat_map(|t| t.items.iter()).filter(|it| s.state.selection.contains(&it.id)).filter_map(|it| media(it).map(|m| (it.id, it.item, m.0, m.1, m.2))).collect();
++    if !sel.is_empty() {
++        return sel;
++    }
++    q.video_tracks.first().map(|t| t.items.iter().filter_map(|it| media(it).map(|m| (it.id, it.item, m.0, m.1, m.2))).collect()).unwrap_or_default()
++}
++
++/// Nuova sequenza verticale 1080×1920 con le clip scelte: gioco sotto, cam sopra, e dietro alla cam
++/// il gioco o la cam sfocati (`bg`: game | cam | none). `layout` come quello di Jarvis Clipper.
++fn make_short(s: &mut Session, p: &Value) -> Result<Value> {
++    let cmd = "jarvis.makeShort";
++    let lay = p.get("layout").ok_or_else(|| bad(cmd, "manca il layout"))?.clone();
++    let bg = str_p(p, "bg").unwrap_or("game").to_string();
++    let rect = |k: &str| -> Option<(f64, f64, f64, f64)> {
++        let r = lay.get(k)?;
++        Some((r["x"].as_f64()?, r["y"].as_f64()?, r["w"].as_f64()?, r["h"].as_f64()?))
++    };
++    let (cam, game) = (rect("cam"), rect("game").ok_or_else(|| bad(cmd, "manca il gioco nel layout"))?);
++    let split = lay["split"].as_f64().unwrap_or(0.4).clamp(0.2, 0.6);
++    let margin = lay["margin"].as_f64().unwrap_or(0.05).clamp(0.0, 0.2);
++    let targets = short_targets(s);
++    if targets.is_empty() {
++        return Err(bad(cmd, "nessun video: metti il video nella timeline (e selezionalo)"));
++    }
++    let (src_seq, fps, name) = {
++        let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
++        let id = s.state.active_sequence.ok_or(EngineError::NoSequence)?;
++        (id, q.settings.frame_rate.as_f64(), s.project.item(id).map(|i| i.name.clone()).unwrap_or_else(|| "Video".into()))
++    };
++    // le clip (video + audio collegato) con i loro tempi, relativi alla prima
++    let (vids, auds) = {
++        let q = s.project.sequence(src_seq).ok_or(EngineError::NoSequence)?;
++        let ids: std::collections::HashSet<ClipId> = targets.iter().map(|t| t.0).collect();
++        let vids: Vec<filmcraft_project::TrackItem> = q.video_tracks.iter().flat_map(|t| t.items.iter()).filter(|it| ids.contains(&it.id)).cloned().collect();
++        let links: std::collections::HashSet<u64> = vids.iter().filter_map(|it| it.link).collect();
++        let auds: Vec<filmcraft_project::TrackItem> = q.audio_tracks.iter().flat_map(|t| t.items.iter()).filter(|it| it.link.is_some_and(|l| links.contains(&l))).cloned().collect();
++        (vids, auds)
++    };
++    let t0 = vids.iter().map(|v| v.start).min().unwrap_or(Tick::ZERO);
++    let r = s.execute("file.newSequence", json!({"name": format!("{name} - Short Jarvis"), "width": 1080, "height": 1920, "fps": fps, "video": 3, "audio": 1}))?;
++    let seq = filmcraft_project::ItemId(r["sequence"].as_u64().ok_or_else(|| bad(cmd, "sequenza non creata"))?);
++    let (sw, sh) = (targets[0].3, targets[0].4);
++    let (ow, oh) = (1080.0_f64, 1920.0_f64);
++    let has_cam = cam.is_some();
++    let cam_h = if has_cam { (oh * split / 2.0).round() * 2.0 } else { 0.0 };
++    let game_h = oh - cam_h;
++    let n = s.edit("Trasforma in short", |pr, _st| {
++        let rate = pr.sequence(seq).map(|q| q.settings.frame_rate).ok_or(EngineError::NoSequence)?;
++        let mut layers: [Vec<filmcraft_project::TrackItem>; 3] = Default::default();
++        let mut audio = Vec::new();
++        for v in &vids {
++            let start = Tick(v.start.0 - t0.0);
++            let mk = |pr: &mut filmcraft_project::Project| pr.make_track_item(v.item, TrackKind::Video, start, TimeRange::new(v.source_in, v.duration), rate);
++            // gioco sotto
++            if let Some(mut g) = mk(pr) {
++                g.name = "GIOCO".into();
++                let gr = rect_aspect(game, ow / game_h, sw, sh);
++                place_rect(&mut g, gr, sw, sh, ow, game_h, ow / 2.0, cam_h + game_h / 2.0, true);
++                layers[1].push(g);
++            }
++            if let Some(cr) = cam {
++                if bg == "none" {
++                    if let Some(mut c) = mk(pr) {
++                        c.name = "CAM".into();
++                        place_rect(&mut c, rect_aspect(cr, ow / cam_h, sw, sh), sw, sh, ow, cam_h, ow / 2.0, cam_h / 2.0, true);
++                        layers[2].push(c);
++                    }
++                } else {
++                    // dietro: il gioco (o la cam) ingrandito e sfocato
++                    if let Some(mut b) = mk(pr) {
++                        b.name = "SFONDO SFUMATO".into();
++                        let br = rect_aspect(if bg == "cam" { cr } else { game }, ow / cam_h, sw, sh);
++                        place_rect(&mut b, br, sw, sh, ow, cam_h, ow / 2.0, cam_h / 2.0, true);
++                        if let Some(mut e) = fx_instance("gaussian_blur") {
++                            e.params.insert("blurriness".into(), Param::new(ParamValue::Float(60.0)));
++                            e.params.insert("repeat_edge".into(), Param::new(ParamValue::Bool(true)));
++                            b.effects.push(e);
++                        }
++                        if let Some(mut e) = fx_instance("brightness_contrast") {
++                            e.params.insert("brightness".into(), Param::new(ParamValue::Float(-10.0)));
++                            b.effects.push(e);
++                        }
++                        layers[0].push(b);
++                    }
++                    // sopra: la cam intera, dentro il riquadro con un po' di margine
++                    if let Some(mut c) = mk(pr) {
++                        c.name = "CAM".into();
++                        place_rect(&mut c, cr, sw, sh, ow * (1.0 - 2.0 * margin), cam_h * (1.0 - 2.0 * margin), ow / 2.0, cam_h / 2.0, false);
++                        layers[2].push(c);
++                    }
++                }
++            }
++        }
++        for a in &auds {
++            if let Some(mut ti) = pr.make_track_item(a.item, TrackKind::Audio, Tick(a.start.0 - t0.0), TimeRange::new(a.source_in, a.duration), rate) {
++                ti.effects = a.effects.clone();
++                ti.gain_db = a.gain_db;
++                ti.enabled = a.enabled;
++                ti.source_channels = a.source_channels.clone();
++                audio.push(ti);
++            }
++        }
++        let q = pr.sequence_mut(seq).ok_or(EngineError::NoSequence)?;
++        let mut n = 0;
++        for (i, items) in layers.into_iter().enumerate() {
++            if let Some(tr) = q.video_tracks.get_mut(i) {
++                tr.name = ["Sfondo", "Gioco", "Cam"][i].to_string();
++                n += items.len();
++                tr.items.extend(items);
++                tr.sort();
++            }
++        }
++        if let Some(tr) = q.audio_tracks.get_mut(0) {
++            tr.items.extend(audio);
++            tr.sort();
++        }
++        q.check().map_err(EngineError::Other)?;
++        Ok(n)
++    })?;
++    let _ = s.execute("sequence.open", json!({"item": seq.0}));
++    Ok(json!({"sequence": seq.0, "clips": n, "source": lay["source"]}))
++}
 diff --git a/crates/engine/src/lib.rs b/crates/engine/src/lib.rs
 index cead3c7..3d04cce 100644
 --- a/crates/engine/src/lib.rs
@@ -3795,10 +3964,10 @@ index 0000000..82badfb
 +}
 diff --git a/crates/ui-egui/src/jarvis_audio.rs b/crates/ui-egui/src/jarvis_audio.rs
 new file mode 100644
-index 0000000..de22cf7
+index 0000000..2060899
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_audio.rs
-@@ -0,0 +1,289 @@
+@@ -0,0 +1,335 @@
 +//! Jarvis: musica sotto la voce.
 +//! - "Abbassa la musica quando parlo": le clip selezionate diventano Musica con il ducking di
 +//!   Essential Sound contro tutto il resto (la voce), e si generano i keyframe del volume.
@@ -3818,6 +3987,8 @@ index 0000000..de22cf7
 +pub(crate) struct SepRun {
 +    /// "separa" o "proxy"
 +    kind: &'static str,
++    /// dati in più per quando finisce (es. lo sfondo scelto per lo short)
++    extra: Value,
 +    res: Res,
 +    prog_file: std::path::PathBuf,
 +    pub(crate) msg: String,
@@ -3930,7 +4101,7 @@ index 0000000..de22cf7
 +        }
 +        c2.request_repaint();
 +    });
-+    app.jarvis_ui.sep = Some(SepRun { kind: "separa", res, prog_file, msg: "Separo voce e musica…".into() });
++    app.jarvis_ui.sep = Some(SepRun { kind: "separa", extra: Value::Null, res, prog_file, msg: "Separo voce e musica…".into() });
 +    app.ui.status = "Jarvis sta separando voce e musica: puoi continuare a lavorare".into();
 +}
 +
@@ -3952,6 +4123,7 @@ index 0000000..de22cf7
 +        return;
 +    };
 +    let kind = run.kind;
++    let extra = run.extra.clone();
 +    app.jarvis_ui.sep = None;
 +    let v = match r {
 +        Ok(v) => v,
@@ -3962,6 +4134,23 @@ index 0000000..de22cf7
 +    };
 +    if kind == "proxy" {
 +        proxies_done(app, &v);
++        return;
++    }
++    if kind == "short" {
++        let mut lay = v["layout"].clone();
++        lay["source"] = v["source"].clone();
++        app.ui.status = match app.session.execute("jarvis.makeShort", json!({"layout": lay, "bg": extra["bg"]})) {
++            Ok(r) => format!(
++                "✅ Short creato ({} livelli). Cam presa {}: se non è giusta sistemala con Ritaglia/Trasforma sul monitor.",
++                r["clips"].as_u64().unwrap_or(0),
++                match v["source"].as_str() {
++                    Some("progetto") => "dall'ultimo layout di Jarvis Clipper",
++                    Some("volto") => "riconoscendo il tuo viso",
++                    _ => "in basso a sinistra (non ho trovato il viso)",
++                }
++            ),
++            Err(e) => format!("⚠ {e}"),
++        };
 +        return;
 +    }
 +    let items: Vec<Value> = v["items"]
@@ -4035,7 +4224,7 @@ index 0000000..de22cf7
 +        }
 +        c2.request_repaint();
 +    });
-+    app.jarvis_ui.sep = Some(SepRun { kind, res, prog_file, msg: msg.into() });
++    app.jarvis_ui.sep = Some(SepRun { kind, extra: Value::Null, res, prog_file, msg: msg.into() });
 +    app.ui.status = msg.into();
 +    true
 +}
@@ -4087,6 +4276,32 @@ index 0000000..de22cf7
 +    }
 +    let _ = app.session.execute("media.toggleProxies", json!({"enabled": true}));
 +    app.ui.status = format!("✅ Preview fluida attiva ({} video). L'export usa sempre i video originali.", ok.len());
++}
++
++// ---------------------------------------------------------------- trasforma in short
++
++/// Tasto destro › Trasforma in short: Jarvis trova dov'è la cam (ultimo layout usato in Jarvis
++/// Clipper per video di questa misura, o il viso), poi si crea la sequenza verticale.
++pub(crate) fn short_start(app: &mut FilmcraftApp, ctx: &egui::Context, bg: &str) {
++    if app.jarvis_ui.sep.is_some() {
++        return;
++    }
++    let targets = filmcraft_engine::jarvis::short_targets(&app.session);
++    let Some(first) = targets.first() else {
++        app.ui.status = "⚠ Metti il video nella timeline (e selezionalo)".into();
++        return;
++    };
++    let (start, dur) = app
++        .session
++        .active_sequence()
++        .and_then(|q| q.find_item(first.0).map(|(_, it)| (it.source_in.seconds(), it.duration.seconds())))
++        .unwrap_or((0.0, 30.0));
++    let job = json!({"path": first.2, "start": start, "dur": dur.max(3.0), "w": first.3, "h": first.4});
++    if spawn_jarvis(app, ctx, "short", "--layout", job, "Jarvis cerca la tua cam e prepara lo short…") {
++        if let Some(r) = app.jarvis_ui.sep.as_mut() {
++            r.extra = json!({"bg": bg});
++        }
++    }
 +}
 diff --git a/crates/ui-egui/src/jarvis_social.rs b/crates/ui-egui/src/jarvis_social.rs
 new file mode 100644
@@ -4860,10 +5075,10 @@ index 0000000..9c8196e
 +}
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..d50ecaa
+index 0000000..c088177
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
-@@ -0,0 +1,1175 @@
+@@ -0,0 +1,1186 @@
 +//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
 +
 +use serde_json::{Value, json};
@@ -5954,6 +6169,17 @@ index 0000000..d50ecaa
 +        run = Some(("jarvis.transition", json!({"preset": "morph", "scope": if many { "selection" } else { "playhead" }, "sfx": false})));
 +    }
 +    let busy = app.jarvis_ui.sep.is_some();
++    ui.add_enabled_ui(!busy, |ui| {
++        ui.menu_button("📱 Trasforma in short (come Jarvis Clipper)", |ui| {
++            for (bg, label) in [("game", "Cam sopra con il gioco sfocato dietro"), ("cam", "Cam sopra con la cam sfocata dietro"), ("none", "Cam sopra e gioco sotto (senza sfondo)")] {
++                if ui.button(label).clicked() {
++                    crate::jarvis_audio::short_start(app, ctx, bg);
++                    ui.close();
++                }
++            }
++            ui.small("Usa le clip selezionate (o tutta la traccia V1) e crea una sequenza 9:16 nuova.");
++        });
++    });
 +    if ui.add_enabled(!busy, egui::Button::new("⚡ Preview fluida (proxy leggeri di Jarvis)")).on_hover_text("Se la preview lagga: Jarvis crea copie leggere dei video (selezionati, o tutti) e la preview usa quelle. L'export resta con gli originali.").clicked() {
 +        crate::jarvis_audio::proxies_selected(app, ctx);
 +        ui.close();

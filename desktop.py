@@ -61,6 +61,16 @@ if __name__ == "__main__":
                     pass
                 ok = True
             os._exit(0 if ok else 1)
+    if "--layout" in sys.argv:
+        # chiamato da FilmCraft Jarvis: dov'è la cam, per "Trasforma in short"
+        i = sys.argv.index("--layout")
+        try:
+            from core import short_layout
+            ok = short_layout.run(sys.argv[i + 1], sys.argv[i + 2])
+        except Exception:
+            traceback.print_exc()
+            ok = False
+        os._exit(0 if ok else 1)
     if "--proxy" in sys.argv:
         # chiamato da FilmCraft Jarvis: copie leggere dei video per la preview
         i = sys.argv.index("--proxy")
