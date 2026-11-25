@@ -296,10 +296,10 @@ index 44399e4..f4606e8 100644
      v.extend(crate::remix::commands());
 diff --git a/crates/engine/src/jarvis.rs b/crates/engine/src/jarvis.rs
 new file mode 100644
-index 0000000..1011d2e
+index 0000000..e07d017
 --- /dev/null
 +++ b/crates/engine/src/jarvis.rs
-@@ -0,0 +1,2137 @@
+@@ -0,0 +1,2393 @@
 +//! Jarvis Composer: sottotitoli animati stile AutoCut, preset di transizioni ed effetti sulle clip
 +//! (FilmCraft Jarvis, build di JarvisClipper). Comandi `jarvis.*`.
 +
@@ -1320,6 +1320,7 @@ index 0000000..1011d2e
 +            Ok(json!({"sfx": n}))
 +        }),
 +        spec("jarvis.composerItem", "Jarvis: Transizione Premiere Composer", r#"{"path":str,"time":ticks?,"scope":"playhead|selection|all"?,"sfx":bool?,"sfxGain":f?}"#, mh_apply),
++        spec("jarvis.animate", "Jarvis: Animazione entrata/uscita", r#"{"in":str?,"out":str?,"framesIn":n?,"framesOut":n?,"sfx":bool?,"sfxGain":f?}"#, clip_animate),
 +        spec("jarvis.placeStems", "Jarvis: Voce e musica separate", r#"{"items":[{"clip":id,"voice":str,"music":str}]}"#, place_stems),
 +        spec("jarvis.clipFx", "Jarvis: Effetto clip", r#"{"preset":"punch|zoom_in|zoom_out|shake","amount":f?}"#, clip_fx),
 +    ]
@@ -2437,6 +2438,261 @@ index 0000000..1011d2e
 +    }
 +    out
 +}
++
++// ---------------------------------------------------------------- animazioni di entrata/uscita (Jarvis Composer › Animazioni)
++
++/// Entrate (le uscite sono le stesse al contrario): (id, nome).
++pub const ANIM_FX: &[(&str, &str)] = &[
++    ("pop", "Pop"),
++    ("pop_blur", "Pop + motion blur"),
++    ("bounce", "Rimbalzo"),
++    ("slide_left", "Da sinistra"),
++    ("slide_right", "Da destra"),
++    ("slide_top", "Dall'alto"),
++    ("slide_bottom", "Dal basso"),
++    ("drop", "Caduta"),
++    ("zoom_in", "Zoom grande"),
++    ("zoom_out", "Zoom piccolo"),
++    ("spin", "Giro"),
++    ("swing", "Dondolo"),
++    ("flip", "Carta"),
++    ("fade", "Dissolvenza"),
++    ("blur", "Sfocato"),
++    ("glitch", "Glitch"),
++    ("shake", "Scossone"),
++];
++
++fn ease_out(p: f64) -> f64 {
++    1.0 - (1.0 - p).powi(3)
++}
++fn back_out(p: f64) -> f64 {
++    let c1 = 1.70158;
++    let c3 = c1 + 1.0;
++    1.0 + c3 * (p - 1.0).powi(3) + c1 * (p - 1.0).powi(2)
++}
++fn bounce_out(p: f64) -> f64 {
++    let (n1, d1) = (7.5625, 2.75);
++    if p < 1.0 / d1 {
++        n1 * p * p
++    } else if p < 2.0 / d1 {
++        let q = p - 1.5 / d1;
++        n1 * q * q + 0.75
++    } else if p < 2.5 / d1 {
++        let q = p - 2.25 / d1;
++        n1 * q * q + 0.9375
++    } else {
++        let q = p - 2.625 / d1;
++        n1 * q * q + 0.984375
++    }
++}
++
++/// Lo stato di un'animazione di ENTRATA a `p` (0 = inizio, 1 = arrivata):
++/// [spostamento x e y (in frazioni dello schermo), scala, scala in larghezza, rotazione, opacità,
++///  sfocatura direzionale (px) e il suo angolo, sfocatura gaussiana, glitch (spostamento x)].
++/// Le uscite usano lo stesso con p al contrario. Serve anche alle anteprime del Composer.
++pub fn anim_state(preset: &str, p: f64) -> [f64; 10] {
++    let p = p.clamp(0.0, 1.0);
++    let e = ease_out(p);
++    let mb = |peak: f64| peak * (1.0 - p).powi(2); // motion blur che si spegne arrivando
++    // [dx, dy, scale, scale_w, rot, opacity, dblur, dangle, gblur, glitch]
++    match preset {
++        "pop" => [0.0, 0.0, back_out(p) * 100.0, 1.0, 0.0, (p * 3.0).min(1.0), 0.0, 0.0, 0.0, 0.0],
++        "pop_blur" => [0.0, 0.0, back_out(p) * 100.0, 1.0, 0.0, (p * 3.0).min(1.0), 0.0, 0.0, mb(28.0), 0.0],
++        "bounce" => [0.0, 0.0, bounce_out(p) * 100.0, 1.0, 0.0, (p * 4.0).min(1.0), 0.0, 0.0, 0.0, 0.0],
++        "slide_left" => [-(1.0 - back_out(p)), 0.0, 100.0, 1.0, 0.0, 1.0, mb(220.0), 90.0, 0.0, 0.0],
++        "slide_right" => [1.0 - back_out(p), 0.0, 100.0, 1.0, 0.0, 1.0, mb(220.0), 90.0, 0.0, 0.0],
++        "slide_top" => [0.0, -(1.0 - back_out(p)), 100.0, 1.0, 0.0, 1.0, mb(220.0), 0.0, 0.0, 0.0],
++        "slide_bottom" => [0.0, 1.0 - back_out(p), 100.0, 1.0, 0.0, 1.0, mb(220.0), 0.0, 0.0, 0.0],
++        "drop" => [0.0, -(1.0 - bounce_out(p)), 100.0, 1.0, 0.0, 1.0, mb(160.0), 0.0, 0.0, 0.0],
++        "zoom_in" => [0.0, 0.0, 100.0 + 200.0 * (1.0 - e), 1.0, 0.0, e, 0.0, 0.0, mb(40.0), 0.0],
++        "zoom_out" => [0.0, 0.0, 30.0 + 70.0 * back_out(p), 1.0, 0.0, (p * 2.5).min(1.0), 0.0, 0.0, mb(20.0), 0.0],
++        "spin" => [0.0, 0.0, back_out(p) * 100.0, 1.0, -270.0 * (1.0 - e), (p * 2.5).min(1.0), 0.0, 0.0, mb(18.0), 0.0],
++        "swing" => {
++            let w = (1.0 - p) * (p * std::f64::consts::PI * 3.0).sin() * 25.0;
++            [0.0, 0.0, 100.0, 1.0, w, (p * 4.0).min(1.0), 0.0, 0.0, 0.0, 0.0]
++        }
++        "flip" => [0.0, 0.0, 100.0, back_out(p).max(0.0), 0.0, (p * 3.0).min(1.0), mb(80.0), 90.0, 0.0, 0.0],
++        "fade" => [0.0, 0.0, 100.0, 1.0, 0.0, p, 0.0, 0.0, 0.0, 0.0],
++        "blur" => [0.0, 0.0, 100.0 + 8.0 * (1.0 - e), 1.0, 0.0, e, 0.0, 0.0, 60.0 * (1.0 - e), 0.0],
++        "glitch" => {
++            let k = (p * 8.0).floor() as i64;
++            let jit = [0.08, -0.12, 0.05, -0.07, 0.1, -0.03, 0.02, 0.0, 0.0][k.clamp(0, 8) as usize];
++            let vis = if [1, 3, 4, 6, 7, 8].contains(&k) { 1.0 } else { 0.25 };
++            [0.0, 0.0, 100.0, 1.0, 0.0, vis, if p < 0.9 { 90.0 } else { 0.0 }, 90.0, 0.0, jit]
++        }
++        "shake" => {
++            let a = (1.0 - p) * 0.03;
++            [a * (p * 47.0).sin(), a * (p * 31.0).cos(), 100.0, 1.0, (1.0 - p) * 4.0 * (p * 39.0).sin(), (p * 5.0).min(1.0), 0.0, 0.0, 0.0, 0.0]
++        }
++        _ => [0.0, 0.0, 100.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
++    }
++}
++
++fn anim_sfx_kind(preset: &str) -> Option<&'static str> {
++    Some(match preset {
++        "pop" | "pop_blur" | "bounce" | "zoom_out" | "flip" => "pop",
++        "slide_left" | "slide_right" | "slide_top" | "slide_bottom" | "drop" | "spin" | "swing" | "zoom_in" => "swoosh",
++        "glitch" => "glitch",
++        "shake" => "boom",
++        _ => return None,
++    })
++}
++
++/// Animazioni di entrata e uscita sulle clip selezionate (immagini, video, titoli): un keyframe per
++/// fotogramma su Movimento/Opacità (+ sfocatura direzionale, gaussiana, Offset per il glitch), tutto
++/// disegnato dalla scheda video.
++fn clip_animate(s: &mut Session, p: &Value) -> Result<Value> {
++    let cmd = "jarvis.animate";
++    let ain = str_p(p, "in").unwrap_or("none").to_string();
++    let aout = str_p(p, "out").unwrap_or("none").to_string();
++    if ain == "none" && aout == "none" {
++        return Err(bad(cmd, "scegli un'entrata o un'uscita"));
++    }
++    let clips: Vec<ClipId> = {
++        let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
++        q.video_tracks.iter().flat_map(|t| t.items.iter()).filter(|it| s.state.selection.contains(&it.id)).map(|it| it.id).collect()
++    };
++    if clips.is_empty() {
++        return Err(bad(cmd, "seleziona prima le clip (immagini, video o titoli) da animare"));
++    }
++    let rate = s.sequence_rate();
++    let fd = rate.frame_duration();
++    let (w, h) = s.active_sequence().map(|q| (q.settings.width as f64, q.settings.height as f64)).unwrap_or((1920.0, 1080.0));
++    let fin = u64_p(p, "framesIn").unwrap_or(10).clamp(2, 60) as i64;
++    let fout = u64_p(p, "framesOut").unwrap_or(8).clamp(2, 60) as i64;
++    let n = s.edit_sequence("Animazione Jarvis", |q, _ctx, _st| {
++        let mut n = 0;
++        for c in &clips {
++            let Some((_, it)) = q.find_item_mut(*c) else { continue };
++            let (b0, dur, sp) = (it.source_in, it.duration, it.speed.abs().max(0.01));
++            let total = dur.0 / fd.0.max(1);
++            let (fi, fo) = {
++                let mut fi = if ain == "none" { 0 } else { fin };
++                let mut fo = if aout == "none" { 0 } else { fout };
++                if fi + fo > total {
++                    let k = total as f64 / (fi + fo).max(1) as f64;
++                    fi = (fi as f64 * k) as i64;
++                    fo = (fo as f64 * k) as i64;
++                }
++                (fi, fo)
++            };
++            // tempo dell'effetto (sorgente) del fotogramma k della clip
++            let mt = |k: i64| Tick(b0.0 + (fd.0 as f64 * k as f64 * sp) as i64);
++            let (base_pos, base_sc, base_rot) = match it.effect("motion") {
++                Some(m) => (
++                    m.params.get("position").map(|p| p.vec2_at(b0)).filter(|v| v.x.is_finite() && v.y.is_finite()).unwrap_or(Vec2::new(w / 2.0, h / 2.0)),
++                    m.params.get("scale").map(|p| p.f64_at(b0)).unwrap_or(100.0),
++                    m.params.get("rotation").map(|p| p.f64_at(b0)).unwrap_or(0.0),
++                ),
++                None => (Vec2::new(w / 2.0, h / 2.0), 100.0, 0.0),
++            };
++            let base_op = it.effect("opacity").and_then(|e| e.params.get("opacity")).map(|p| p.f64_at(b0)).unwrap_or(100.0);
++            // i fotogrammi da animare: (indice nella clip, preset, p di entrata)
++            let mut frames: Vec<(i64, String, f64)> = Vec::new();
++            for k in 0..=fi.max(0) {
++                if fi > 0 {
++                    frames.push((k, ain.clone(), k as f64 / fi as f64));
++                }
++            }
++            for k in 0..=fo.max(0) {
++                if fo > 0 {
++                    frames.push((total - fo + k, aout.clone(), 1.0 - k as f64 / fo as f64));
++                }
++            }
++            let mut pos = Param::new(ParamValue::Vec2(base_pos));
++            let mut sc = Param::new(ParamValue::Float(base_sc));
++            let mut scw = Param::new(ParamValue::Float(100.0));
++            let mut rot = Param::new(ParamValue::Float(base_rot));
++            let mut op = Param::new(ParamValue::Float(base_op));
++            let mut db = Param::new(ParamValue::Float(0.0));
++            let mut gb = Param::new(ParamValue::Float(0.0));
++            let mut gl = Param::new(ParamValue::Vec2(Vec2::new(w / 2.0, h / 2.0)));
++            let (mut use_db, mut use_gb, mut use_gl, mut use_w) = (false, false, false, false);
++            let mut angle = 90.0;
++            for (k, pr, pp) in &frames {
++                let st = anim_state(pr, *pp);
++                let t = mt(*k);
++                let li = if pr == "glitch" { Interpolation::Hold } else { Interpolation::Linear };
++                kf(&mut pos, t, ParamValue::Vec2(Vec2::new(base_pos.x + st[0] * w, base_pos.y + st[1] * h)), li);
++                kf(&mut sc, t, ParamValue::Float(base_sc * st[2] / 100.0), Interpolation::Linear);
++                kf(&mut scw, t, ParamValue::Float(st[3] * 100.0), Interpolation::Linear);
++                kf(&mut rot, t, ParamValue::Float(base_rot + st[4]), Interpolation::Linear);
++                kf(&mut op, t, ParamValue::Float(base_op * st[5]), li);
++                kf(&mut db, t, ParamValue::Float(st[6]), li);
++                kf(&mut gb, t, ParamValue::Float(st[8]), Interpolation::Linear);
++                kf(&mut gl, t, ParamValue::Vec2(Vec2::new(w / 2.0 + st[9] * w, h / 2.0)), Interpolation::Hold);
++                use_db |= st[6] > 0.01;
++                use_gb |= st[8] > 0.01;
++                use_gl |= st[9].abs() > 1e-4;
++                use_w |= (st[3] - 1.0).abs() > 1e-4;
++                if st[6] > 0.01 {
++                    angle = st[7];
++                }
++            }
++            if let Some(m) = it.effect_mut("motion") {
++                m.params.insert("position".into(), pos);
++                m.params.insert("scale".into(), sc.clone());
++                m.params.insert("rotation".into(), rot);
++                if use_w {
++                    m.params.insert("uniform_scale".into(), Param::new(ParamValue::Bool(false)));
++                    // larghezza = scala × fattore
++                    let mut sw = Param::new(ParamValue::Float(base_sc));
++                    for (k, pr, pp) in &frames {
++                        let st = anim_state(pr, *pp);
++                        kf(&mut sw, mt(*k), ParamValue::Float(base_sc * st[2] / 100.0 * st[3]), Interpolation::Linear);
++                    }
++                    m.params.insert("scale_width".into(), sw);
++                }
++            }
++            let _ = scw;
++            if let Some(o) = it.effect_mut("opacity") {
++                o.params.insert("opacity".into(), op);
++            }
++            // effetti aggiunti: via quelli messi da un'animazione precedente, poi i nuovi
++            it.effects.retain(|e| !(matches!(e.effect.as_str(), "directional_blur" | "gaussian_blur" | "offset") && e.params.contains_key("jarvis_anim")));
++            if use_gl {
++                if let Some(mut e) = fx_instance("offset") {
++                    e.params.insert("shift".into(), gl);
++                    e.params.insert("jarvis_anim".into(), Param::new(ParamValue::Bool(true)));
++                    it.effects.push(e);
++                }
++            }
++            if use_db {
++                if let Some(mut e) = fx_instance("directional_blur") {
++                    e.params.insert("direction".into(), Param::new(ParamValue::Float(angle)));
++                    e.params.insert("length".into(), db);
++                    e.params.insert("jarvis_anim".into(), Param::new(ParamValue::Bool(true)));
++                    it.effects.push(e);
++                }
++            }
++            if use_gb {
++                if let Some(mut e) = fx_instance("gaussian_blur") {
++                    e.params.insert("blurriness".into(), gb);
++                    e.params.insert("jarvis_anim".into(), Param::new(ParamValue::Bool(true)));
++                    it.effects.push(e);
++                }
++            }
++            n += 1;
++        }
++        Ok(n)
++    })?;
++    let mut sfx = 0;
++    if bool_p(p, "sfx").unwrap_or(true) {
++        let q = s.active_sequence();
++        let mut sounds = Vec::new();
++        for (k, c) in clips.iter().enumerate() {
++            let Some((_, it)) = q.and_then(|q| q.find_item(*c)) else { continue };
++            if let Some(f) = anim_sfx_kind(&ain).and_then(|kd| pick_sfx(kd, k)) {
++                sounds.push((f, it.start));
++            }
++            if let Some(f) = anim_sfx_kind(&aout).and_then(|kd| pick_sfx(kd, k + 1)) {
++                sounds.push((f, Tick((it.end().0 - fd.0 * fout).max(it.start.0))));
++            }
++        }
++        sfx = place_sfx(s, sounds, f64_p(p, "sfxGain").unwrap_or(-4.0))?;
++    }
++    Ok(json!({"clips": n, "sfx": sfx}))
++}
 diff --git a/crates/engine/src/lib.rs b/crates/engine/src/lib.rs
 index cead3c7..3d04cce 100644
 --- a/crates/engine/src/lib.rs
@@ -2815,6 +3071,129 @@ index fd5f66c..fc6ef4d 100644
  	Add Flash Cue Marker…	Aggiungi marcatore Flash Cue…
  	Add Frame Hold	Aggiungi fermo immagine
  	Add Guide…	Aggiungi guida…
+diff --git a/crates/ui-egui/src/jarvis_anims.rs b/crates/ui-egui/src/jarvis_anims.rs
+new file mode 100644
+index 0000000..403ea32
+--- /dev/null
++++ b/crates/ui-egui/src/jarvis_anims.rs
+@@ -0,0 +1,117 @@
++//! Jarvis Composer › Animazioni: entrata e uscita delle clip selezionate (immagini, meme, titoli,
++//! video), con anteprime animate. Le fa `jarvis.animate`.
++
++use filmcraft_engine::jarvis::{ANIM_FX, anim_state};
++use serde_json::{Value, json};
++
++pub(crate) struct Anims {
++    ain: usize,
++    aout: usize,
++    fin: u32,
++    fout: u32,
++    sfx: bool,
++}
++
++impl Default for Anims {
++    fn default() -> Self {
++        // 0 = nessuna; poi gli indici di ANIM_FX + 1
++        Anims { ain: 2, aout: 0, fin: 10, fout: 8, sfx: true }
++    }
++}
++
++fn id_of(i: usize) -> &'static str {
++    if i == 0 { "none" } else { ANIM_FX.get(i - 1).map(|x| x.0).unwrap_or("none") }
++}
++
++/// Una card con l'animazione in loop (entrata, o uscita al contrario).
++fn card(ui: &mut egui::Ui, preset: &str, label: &str, selected: bool, exit: bool, t: f64) -> egui::Response {
++    let (rect, resp) = ui.allocate_exact_size(egui::vec2(104.0, 78.0), egui::Sense::click());
++    let p = ui.painter_at(rect);
++    let bg = if selected { egui::Color32::from_rgb(60, 52, 120) } else { egui::Color32::from_gray(34) };
++    p.rect_filled(rect, 8.0, bg);
++    if selected {
++        p.rect_stroke(rect, 8.0, egui::Stroke::new(2.0, egui::Color32::from_rgb(150, 120, 255)), egui::StrokeKind::Inside);
++    } else if resp.hovered() {
++        p.rect_stroke(rect, 8.0, egui::Stroke::new(1.0, egui::Color32::from_gray(90)), egui::StrokeKind::Inside);
++    }
++    let stage = egui::Rect::from_min_max(rect.min + egui::vec2(4.0, 4.0), rect.max - egui::vec2(4.0, 18.0));
++    p.text(egui::pos2(rect.center().x, rect.max.y - 9.0), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(11.0), egui::Color32::from_gray(225));
++    if preset == "none" {
++        p.text(stage.center(), egui::Align2::CENTER_CENTER, "—", egui::FontId::proportional(18.0), egui::Color32::from_gray(140));
++        return resp;
++    }
++    // ciclo: 0.55 s di animazione, poi fermo
++    let cyc = 1.4;
++    let k = (t % cyc) / 0.55;
++    let pp = if exit { 1.0 - k.min(1.0) } else { k.min(1.0) };
++    let st = anim_state(preset, pp);
++    let c = stage.center() + egui::vec2((st[0] + st[9]) as f32 * stage.width() * 0.9, st[1] as f32 * stage.height() * 0.9);
++    let s = (st[2] / 100.0) as f32;
++    let (hw, hh) = (22.0 * s * st[3] as f32, 15.0 * s);
++    let a = st[4].to_radians() as f32;
++    let alpha = (st[5].clamp(0.0, 1.0) * 255.0) as u8;
++    let rotp = |dx: f32, dy: f32, o: egui::Vec2| egui::pos2(c.x + o.x + dx * a.cos() - dy * a.sin(), c.y + o.y + dx * a.sin() + dy * a.cos());
++    let quad = |o: egui::Vec2, col: egui::Color32| {
++        egui::Shape::convex_polygon(vec![rotp(-hw, -hh, o), rotp(hw, -hh, o), rotp(hw, hh, o), rotp(-hw, hh, o)], col, egui::Stroke::NONE)
++    };
++    // scia del motion blur nella direzione del movimento
++    if st[6] > 1.0 {
++        let dir = if (st[7] - 90.0).abs() < 1.0 { egui::vec2(1.0, 0.0) } else { egui::vec2(0.0, 1.0) };
++        let len = (st[6] as f32 / 220.0 * 22.0).min(26.0);
++        for i in 1..=4 {
++            let o = dir * len * (i as f32 / 4.0);
++            let ca = egui::Color32::from_rgba_unmultiplied(255, 200, 80, alpha / (2 + i as u8));
++            p.add(quad(o, ca));
++            p.add(quad(-o, ca));
++        }
++    }
++    let soft = (st[8] as f32 / 6.0).min(8.0);
++    if soft > 0.5 {
++        p.add(egui::Shape::rect_filled(egui::Rect::from_center_size(c, egui::vec2(hw * 2.0 + soft * 2.0, hh * 2.0 + soft * 2.0)), 6.0, egui::Color32::from_rgba_unmultiplied(255, 200, 80, alpha / 4)));
++    }
++    p.add(quad(egui::Vec2::ZERO, egui::Color32::from_rgba_unmultiplied(255, 200, 80, alpha)));
++    if a.abs() < 0.2 && s > 0.3 {
++        p.text(c, egui::Align2::CENTER_CENTER, "😎", egui::FontId::proportional(14.0 * s), egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha));
++    }
++    resp
++}
++
++pub(crate) fn tab(a: &mut Anims, ui: &mut egui::Ui, ctx: &egui::Context) -> Option<(String, Value, String)> {
++    let mut run = None;
++    let t = ctx.input(|i| i.time);
++    ctx.request_repaint_after(std::time::Duration::from_millis(33));
++    ui.heading("🎭 Animazioni di entrata e uscita");
++    ui.label("Seleziona nella timeline le clip da animare (immagini, meme, titoli, video), scegli come entrano e come escono, poi Applica.");
++    let names: Vec<(&str, &str)> = std::iter::once(("none", "Nessuna")).chain(ANIM_FX.iter().copied()).collect();
++    for (exit, title) in [(false, "⬇ Entrata"), (true, "⬆ Uscita")] {
++        ui.add_space(4.0);
++        ui.horizontal(|ui| {
++            ui.label(egui::RichText::new(title).strong().size(15.0));
++            let f = if exit { &mut a.fout } else { &mut a.fin };
++            ui.add(egui::Slider::new(f, 4..=30).suffix(" fotogrammi"));
++        });
++        let cols = ((ui.available_width() / 110.0).floor() as usize).max(1);
++        egui::Grid::new(if exit { "jarvis_anim_out" } else { "jarvis_anim_in" }).spacing([6.0, 6.0]).show(ui, |ui| {
++            for (i, (id, name)) in names.iter().enumerate() {
++                let sel = if exit { a.aout == i } else { a.ain == i };
++                if card(ui, id, name, sel, exit, t + i as f64 * 0.09).clicked() {
++                    if exit { a.aout = i } else { a.ain = i }
++                }
++                if (i + 1) % cols == 0 {
++                    ui.end_row();
++                }
++            }
++        });
++    }
++    ui.add_space(6.0);
++    ui.checkbox(&mut a.sfx, "🔊 Con il suono (pop, swoosh, glitch…)");
++    if ui.add_sized([ui.available_width(), 30.0], egui::Button::new("✨ Applica alle clip selezionate")).clicked() {
++        run = Some((
++            "jarvis.animate".into(),
++            json!({"in": id_of(a.ain), "out": id_of(a.aout), "framesIn": a.fin, "framesOut": a.fout, "sfx": a.sfx}),
++            String::new(),
++        ));
++    }
++    ui.small("Le animazioni sono keyframe normali su Movimento e Opacità: le ritocchi in Controlli effetti. Riapplicando, quelle vecchie vengono sostituite.");
++    run
++}
 diff --git a/crates/ui-egui/src/jarvis_assist.rs b/crates/ui-egui/src/jarvis_assist.rs
 new file mode 100644
 index 0000000..82badfb
@@ -4481,10 +4860,10 @@ index 0000000..9c8196e
 +}
 diff --git a/crates/ui-egui/src/jarvis_ui.rs b/crates/ui-egui/src/jarvis_ui.rs
 new file mode 100644
-index 0000000..1c26479
+index 0000000..d50ecaa
 --- /dev/null
 +++ b/crates/ui-egui/src/jarvis_ui.rs
-@@ -0,0 +1,1166 @@
+@@ -0,0 +1,1175 @@
 +//! Jarvis Composer: finestra con sottotitoli animati, transizioni ed effetti (FilmCraft Jarvis).
 +
 +use serde_json::{Value, json};
@@ -4525,6 +4904,8 @@ index 0000000..1c26479
 +    trans_sfx: bool,
 +    /// scheda Suoni
 +    pub(crate) sounds: crate::jarvis_sounds::Sounds,
++    /// scheda Animazioni
++    pub(crate) anims: crate::jarvis_anims::Anims,
 +    /// trascrizione in corso in background
 +    cap: Option<CapRun>,
 +    /// separazione voce/musica in corso
@@ -4581,6 +4962,7 @@ index 0000000..1c26479
 +            sfx_gain: -3.0,
 +            trans_sfx: true,
 +            sounds: Default::default(),
++            anims: Default::default(),
 +            cap: None,
 +            sep: None,
 +            upd_checked: false,
@@ -4606,7 +4988,7 @@ index 0000000..1c26479
 +/// Apre Jarvis Composer su una scheda (0 Composer, 1 Sottotitoli, 2 Transizioni ed effetti).
 +pub(crate) fn open_tab(app: &mut FilmcraftApp, tab: usize) {
 +    app.jarvis_ui.open = true;
-+    app.jarvis_ui.tab = tab.min(6);
++    app.jarvis_ui.tab = tab.min(7);
 +}
 +
 +pub(crate) fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
@@ -4656,7 +5038,7 @@ index 0000000..1c26479
 +        .default_pos(ctx.content_rect().right_top() + egui::vec2(-400.0, 80.0))
 +        .show(ctx, |ui| {
 +            ui.horizontal(|ui| {
-+                for (i, t) in ["🎞 Composer", "🔤 Sottotitoli", "🎬 Transizioni ed effetti", "🆎 Titoli TikTok", "📢 Social", "✨ Gemini", "🔊 Suoni"].iter().enumerate() {
++                for (i, t) in ["🎞 Composer", "🔤 Sottotitoli", "🎬 Transizioni ed effetti", "🆎 Titoli TikTok", "📢 Social", "✨ Gemini", "🔊 Suoni", "🎭 Animazioni"].iter().enumerate() {
 +                    ui.selectable_value(&mut st.tab, i, egui::RichText::new(*t).size(15.0).strong());
 +                }
 +            });
@@ -4664,6 +5046,11 @@ index 0000000..1c26479
 +            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
 +            if st.tab == 0 {
 +                composer_library_ui(st, ui, ctx, &mut run);
++            }
++            if st.tab == 7 {
++                if let Some(r) = crate::jarvis_anims::tab(&mut st.anims, ui, ctx) {
++                    run = Some(r);
++                }
 +            }
 +            if st.tab == 6 {
 +                if let Some(r) = crate::jarvis_sounds::tab(&mut st.sounds, ui) {
@@ -4904,6 +5291,7 @@ index 0000000..1c26479
 +    match cmd {
 +        "jarvis.autoCaptions" => format!("✅ Creati {} pezzi di sottotitoli", v["captions"].as_u64().unwrap_or(0)),
 +        "jarvis.transition" | "jarvis.composer" => format!("✅ Transizioni messe: {} · suoni: {}", v["transitions"].as_u64().unwrap_or(0), v["sfx"].as_u64().unwrap_or(0)),
++        "jarvis.animate" => format!("✅ Animazione messa su {} clip · suoni: {}", v["clips"].as_u64().unwrap_or(0), v["sfx"].as_u64().unwrap_or(0)),
 +        "jarvis.placeSfx" => "✅ Suono messo sull'indicatore (traccia SFX Jarvis)".into(),
 +        "jarvis.clipFx" => format!("✅ Effetto applicato a {} clip", v["clips"].as_u64().unwrap_or(0)),
 +        "jarvis.composerItem" => format!("✅ Transizione Composer: {} livelli · suoni: {}", v["layers"].as_u64().unwrap_or(0), v["sfx"].as_u64().unwrap_or(0)),
@@ -5652,10 +6040,10 @@ index 0000000..1c26479
 +    *g = Some((now, seen));
 +}
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
-index c3fb34a..f1ae07e 100644
+index c3fb34a..934fc04 100644
 --- a/crates/ui-egui/src/lib.rs
 +++ b/crates/ui-egui/src/lib.rs
-@@ -73,6 +73,12 @@ pub mod state;
+@@ -73,6 +73,13 @@ pub mod state;
  pub mod theme;
  mod theme_favorites;
  pub mod updates_ui;
@@ -5664,11 +6052,12 @@ index c3fb34a..f1ae07e 100644
 +pub(crate) mod jarvis_assist;
 +pub(crate) mod jarvis_audio;
 +pub(crate) mod jarvis_sounds;
++pub(crate) mod jarvis_anims;
 +pub(crate) mod jarvis_social;
  pub mod widgets;
  
  use std::collections::HashMap;
-@@ -215,6 +221,7 @@ pub struct FilmcraftApp {
+@@ -215,6 +222,7 @@ pub struct FilmcraftApp {
      pub hooks: HostHooks,
      pub dialog: Option<Dialog>,
      pub(crate) updates_rt: updates_ui::Runtime,
@@ -5676,7 +6065,7 @@ index c3fb34a..f1ae07e 100644
      pub file_dialogs: panels::file_dialogs::FileDialogState,
      /// The native file dialog the host is showing ([`Self::pick`]).
      native_dialog: Option<native_dialogs::PendingDialog>,
-@@ -351,6 +358,8 @@ pub struct FilmcraftApp {
+@@ -351,6 +359,8 @@ pub struct FilmcraftApp {
      fonts_ready: bool,
      pub integrated_titlebar: bool,
      pub last_timeline_width: f32,
