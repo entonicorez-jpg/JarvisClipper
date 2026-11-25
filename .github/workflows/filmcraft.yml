@@ -38,7 +38,8 @@ jobs:
           cd fc
           ok=""
           tag=$(gh release view -R storytold/filmcraft --json tagName -q .tagName 2>/dev/null || true)
-          for ref in "$tag" main; do
+          base=$(cat ../filmcraft/base.txt 2>/dev/null || true)
+          for ref in "$tag" main "$base"; do
             [ -z "$ref" ] && continue
             git checkout -q -f "$ref" && git reset -q --hard && git clean -qfd
             if git apply --3way ../filmcraft/jarvis.patch 2>/dev/null || git apply ../filmcraft/jarvis.patch; then ok="$ref"; break; fi
